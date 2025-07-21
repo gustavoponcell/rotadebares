@@ -11,6 +11,7 @@ from functools import lru_cache  # cache para funções de geocoding
 import requests  # para chamadas HTTP (Overpass, OSRM, Open-Elevation)
 from requests.adapters import HTTPAdapter  # para configurar retries automáticos
 from urllib3.util.retry import Retry  # política de retry (backoff)
+from concurrent.futures import ThreadPoolExecutor  # para paralelizar requests
 import folium  # para desenhar mapas interativos e marcadores
 import ipywidgets as widgets  # para UI interativa no Colab
 from tqdm.notebook import tqdm  # para barras de progresso
@@ -225,16 +226,18 @@ def osrm_table(latlons, timeout=30):
         resp.raise_for_status()
         return resp.json().get("distances", [])
     except (requests.exceptions.ReadTimeout, requests.exceptions.HTTPError):
-        # quebra em n requisições para cada fonte
-        full = []
-        for i in range(len(latlons)):
+        # dispara uma requisição por fonte em paralelo
+        def fetch_row(idx):
             r = session.get(
                 url,
-                params={"annotations": "distance", "sources": i},
-                timeout=timeout
+                params={"annotations": "distance", "sources": idx},
+                timeout=timeout,
             )
             r.raise_for_status()
-            full.append(r.json().get("distances", [[0]*len(latlons)])[0])
+            return r.json().get("distances", [[0]*len(latlons)])[0]
+
+        with ThreadPoolExecutor() as ex:
+            full = list(ex.map(fetch_row, range(len(latlons))))
         return full
 
 # -----------------------------------------------------------------------
