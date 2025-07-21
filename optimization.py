@@ -132,7 +132,9 @@ def christofides_tsp(dist_matrix: List[List[float]], start: int, end: int) -> Li
 
     cycle = nx.approximation.christofides(g, weight="weight")
 
-    # reordena para comecar em start e terminar em end
+    if cycle and cycle[0] == cycle[-1]:
+        cycle = cycle[:-1]
+
     if start in cycle:
         while cycle[0] != start:
             cycle.append(cycle.pop(0))
@@ -140,8 +142,7 @@ def christofides_tsp(dist_matrix: List[List[float]], start: int, end: int) -> Li
         while cycle[-1] != end:
             cycle.append(cycle.pop(0))
     else:
-        # remove retorno ao inicio e adiciona end no final
-        cycle = cycle[:-1] + [end]
+        cycle.append(end)
 
     return cycle
 
