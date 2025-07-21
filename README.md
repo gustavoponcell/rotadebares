@@ -42,3 +42,19 @@ O módulo `optimization.py` oferece diferentes estratégias para resolver o TSP.
 
 Esses métodos permitem comparar rapidamente a qualidade das rotas geradas.
 
+
+## Testes
+
+Execute a suíte de testes com `pytest`:
+
+```bash
+pytest -q
+```
+
+## Benchmarks
+
+Um script simples `benchmark.py` mede o tempo de execução dos solvers do TSP:
+
+```bash
+python benchmark.py
+```
