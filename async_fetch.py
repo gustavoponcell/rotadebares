@@ -4,7 +4,13 @@ from typing import List, Tuple
 
 import aiohttp
 
-from geocoding import get_city_bbox, dentro_da_cidade
+from geocoding import (
+    get_city_bbox,
+    dentro_da_cidade,
+    get_city_area_id,
+    get_city_polygon,
+    point_in_polygon,
+)
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +36,27 @@ async def close_session() -> None:
 async def coletar_pois_async(cidade: str) -> List[dict]:
     """Busca bares e restaurantes via Overpass de forma assíncrona."""
     bbox = get_city_bbox(cidade)
-    if bbox:
+    area_id = get_city_area_id(cidade)
+    poly = get_city_polygon(cidade)
+    if area_id:
+        q = f"""
+        [out:json][timeout:60];
+        area({area_id})->.a;
+        (
+          node[\"amenity\"=\"bar\"](area.a);
+          way[\"amenity\"=\"bar\"](area.a);
+          rel[\"amenity\"=\"bar\"](area.a);
+          node[\"bar\"=\"yes\"](area.a);
+          node[\"craft\"=\"brewery\"](area.a);
+          node[\"shop\"=\"alcohol\"](area.a);
+          node[\"amenity\"=\"pub\"](area.a);
+          node[\"amenity\"=\"cafe\"](area.a);
+          node[\"amenity\"=\"fast_food\"](area.a);
+          node[\"amenity\"=\"nightclub\"](area.a);
+        );
+        out center tags;
+        """
+    elif bbox:
         s, n, w, e = bbox
         q = f"""
         [out:json][timeout:60];
@@ -74,12 +100,18 @@ async def coletar_pois_async(cidade: str) -> List[dict]:
 
     pois = []
     for el in elements:
-        name = el.get("tags", {}).get("name")
+        tags = el.get("tags", {})
+        name = tags.get("name")
         lat = el.get("lat") or el.get("center", {}).get("lat")
         lon = el.get("lon") or el.get("center", {}).get("lon")
         if not (name and lat and lon):
             continue
-        if bbox and not dentro_da_cidade(lat, lon, bbox):
+        city_tag = tags.get("addr:city")
+        if city_tag and city_tag.lower() != cidade.lower():
+            continue
+        if poly and not point_in_polygon(float(lat), float(lon), poly):
+            continue
+        if bbox and not poly and not dentro_da_cidade(lat, lon, bbox):
             continue
         pois.append({"name": name, "lat": float(lat), "lon": float(lon)})
     return pois
