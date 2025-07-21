@@ -291,6 +291,18 @@ def fetch_route_geometry(a, b):
     return [(lat, lng) for lng, lat in coords]
 
 
+def fetch_route_geometry_multi(points):
+    """Busca caminho de uma sequência de pontos via OSRM."""
+    coord_str = ";".join(f"{lon},{lat}" for lat, lon in points)
+    url = f"http://router.project-osrm.org/route/v1/foot/{coord_str}"
+    resp = session.get(
+        url, params={"overview": "full", "geometries": "geojson"}, timeout=30
+    )
+    resp.raise_for_status()
+    coords = resp.json()["routes"][0]["geometry"]["coordinates"]
+    return [(lat, lng) for lng, lat in coords]
+
+
 def build_map(route_idx, coords, names):
     """
     Desenha marcadores de partida, POIs ordenados e destino,
@@ -315,10 +327,10 @@ def build_map(route_idx, coords, names):
         coords[route_idx[-1]][:2], tooltip="Destino",
         icon=folium.Icon(color="red", icon="flag")
     ).add_to(m)
-    # desenha linhas entre cada par de pontos
-    for a, b in zip(route_idx, route_idx[1:]):
-        segment = fetch_route_geometry(coords[a], coords[b])
-        folium.PolyLine(segment, weight=4, opacity=0.7).add_to(m)
+    # desenha linha da rota completa em uma única chamada à API
+    ordered = [coords[i][:2] for i in route_idx]
+    full_route = fetch_route_geometry_multi(ordered)
+    folium.PolyLine(full_route, weight=4, opacity=0.7).add_to(m)
     return m
 
 # -----------------------------------------------------------------------
