@@ -11,6 +11,7 @@ from functools import lru_cache  # cache para funções de geocoding
 import requests  # para chamadas HTTP (Overpass, OSRM, Open-Elevation)
 from requests.adapters import HTTPAdapter  # para configurar retries automáticos
 from urllib3.util.retry import Retry  # política de retry (backoff)
+import logging
 import folium  # para desenhar mapas interativos e marcadores
 import ipywidgets as widgets  # para UI interativa no Colab
 from tqdm.notebook import tqdm  # para barras de progresso
@@ -19,6 +20,9 @@ from geopy.geocoders import Nominatim, Photon  # geocoders do OpenStreetMap
 from geopy.exc import GeocoderTimedOut  # exceção de timeout no geopy
 from geopy.extra.rate_limiter import RateLimiter  # controle de chamadas
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2  # OR-Tools para TSP
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+log = logging.getLogger(__name__)
 
 # ---------------------
 # Configura sessão HTTP com retries
@@ -349,21 +353,40 @@ compute_btn    = widgets.Button(description="Gerar HTML", button_style="success"
 out            = widgets.Output()
 pois_checkboxes= []  # lista de caixas de seleção para os POIs
 
+
+class WidgetHandler(logging.Handler):
+    """Exibe mensagens de log no widget de saída."""
+
+    def __init__(self, widget):
+        super().__init__()
+        self.widget = widget
+
+    def emit(self, record):
+        msg = self.format(record)
+        with self.widget:
+            print(msg)
+
+
+widget_handler = WidgetHandler(out)
+widget_handler.setFormatter(logging.Formatter("%(message)s"))
+log.addHandler(widget_handler)
+log.propagate = False
+
 # Função para buscar e listar POIs na interface
 def on_load_pois(_):
     with out:
         clear_output()
-        print(f"🔍 Buscando POIs em {city_widget.value}…")
-        pois = coletar_pois(city_widget.value.strip())
-        pois_checkboxes.clear()
-        items = []
-        for p in pois:
-            desc = f"{p['name']} ({p['lat']:.5f},{p['lon']:.5f})"
-            cb = widgets.Checkbox(False, description=desc)
-            pois_checkboxes.append(cb)
-            items.append(cb)
-        pois_box.children = items
-        print(f"✅ {len(pois)} POIs carregados.")
+    log.info(f"🔍 Buscando POIs em {city_widget.value}…")
+    pois = coletar_pois(city_widget.value.strip())
+    pois_checkboxes.clear()
+    items = []
+    for p in pois:
+        desc = f"{p['name']} ({p['lat']:.5f},{p['lon']:.5f})"
+        cb = widgets.Checkbox(False, description=desc)
+        pois_checkboxes.append(cb)
+        items.append(cb)
+    pois_box.children = items
+    log.info(f"✅ {len(pois)} POIs carregados.")
 
 # Sincroniza valor de destino com partida se checkbox marcado
 def on_same_change(change):
@@ -375,73 +398,74 @@ def on_same_change(change):
 def on_compute(_):
     with out:
         clear_output()
-        # leitura de inputs
-        city = city_widget.value.strip()
-        start = start_txt.value.strip()
-        end = start if same_cb.value else end_txt.value.strip()
 
-        print("⏳ Geocodificando partida e destino…")
-        pt0 = geocode_strict_single(start, city) or geocode_fallback_single(start, city)
-        if not pt0:
-            print(f"❌ Falha geocode partida: {start}")
-            return
-        pt1 = pt0 if same_cb.value else (geocode_strict_single(end, city) or geocode_fallback_single(end, city))
-        if not pt1:
-            print(f"❌ Falha geocode destino: {end}")
-            return
+    # leitura de inputs
+    city = city_widget.value.strip()
+    start = start_txt.value.strip()
+    end = start if same_cb.value else end_txt.value.strip()
 
-        # monta lista de coordenadas e nomes
-        coords = [(pt0[0], pt0[1])]
-        names = ["Partida"]
-        for cb in pois_checkboxes:
-            if cb.value:
-                nm, coord = cb.description.split(' (')
-                lat, lon = coord[:-1].split(',')
-                coords.append((float(lat), float(lon)))
-                names.append(nm)
-        # adiciona extras digitados
-        extras = [l.strip() for l in custom_txt.value.splitlines() if l.strip()]
-        for ex in extras:
-            geo = geocode_strict_single(ex, city) or geocode_fallback_single(ex, city)
-            if geo:
-                coords.append((geo[0], geo[1]))
-                names.append(ex)
+    log.info("⏳ Geocodificando partida e destino…")
+    pt0 = geocode_strict_single(start, city) or geocode_fallback_single(start, city)
+    if not pt0:
+        log.error(f"❌ Falha geocode partida: {start}")
+        return
+    pt1 = pt0 if same_cb.value else (geocode_strict_single(end, city) or geocode_fallback_single(end, city))
+    if not pt1:
+        log.error(f"❌ Falha geocode destino: {end}")
+        return
 
-        coords.append((pt1[0], pt1[1]))
-        names.append("Destino")
+    # monta lista de coordenadas e nomes
+    coords = [(pt0[0], pt0[1])]
+    names = ["Partida"]
+    for cb in pois_checkboxes:
+        if cb.value:
+            nm, coord = cb.description.split(' (')
+            lat, lon = coord[:-1].split(',')
+            coords.append((float(lat), float(lon)))
+            names.append(nm)
+    # adiciona extras digitados
+    extras = [l.strip() for l in custom_txt.value.splitlines() if l.strip()]
+    for ex in extras:
+        geo = geocode_strict_single(ex, city) or geocode_fallback_single(ex, city)
+        if geo:
+            coords.append((geo[0], geo[1]))
+            names.append(ex)
 
-        if len(coords) < 3:
-            print("❌ Selecione ao menos um POI ou extra.")
-            return
+    coords.append((pt1[0], pt1[1]))
+    names.append("Destino")
 
-        # obtém altitudes e incorpora a tupla (lat, lon, alt)
-        print("⏳ Obtendo altitudes…")
-        alts = batch_altitude(coords)
-        coords = [(lat, lon, alt) for (lat, lon), alt in zip(coords, alts)]
+    if len(coords) < 3:
+        log.error("❌ Selecione ao menos um POI ou extra.")
+        return
 
-        # calcula matriz de distâncias
-        print("⏳ Calculando matriz…")
-        dist = osrm_table([(lat, lon) for lat, lon, _ in coords])
+    # obtém altitudes e incorpora a tupla (lat, lon, alt)
+    log.info("⏳ Obtendo altitudes…")
+    alts = batch_altitude(coords)
+    coords = [(lat, lon, alt) for (lat, lon), alt in zip(coords, alts)]
 
-        # define o índice final como o ponto mais próximo do destino
-        end_idx = len(coords) - 1
-        best = min(range(1, end_idx), key=lambda i: dist[i][end_idx])
+    # calcula matriz de distâncias
+    log.info("⏳ Calculando matriz…")
+    dist = osrm_table([(lat, lon) for lat, lon, _ in coords])
 
-        # resolve o TSP
-        print("🚦 Resolvendo TSP…")
-        route = solve_tsp(dist, 0, best)
-        if not route:
-            print("❌ TSP falhou")
-            return
-        route.append(end_idx)
+    # define o índice final como o ponto mais próximo do destino
+    end_idx = len(coords) - 1
+    best = min(range(1, end_idx), key=lambda i: dist[i][end_idx])
 
-        # gera e salva o mapa
-        print("🗺️ Gerando mapa…")
-        m = build_map(route, coords, names)
-        filename = "rota_otimizada.html"
-        m.save(filename)
-        print(f"✅ HTML salvo: {filename}")
-        display(FileLink(filename, result_html_prefix="🔗 ", result_html_suffix=" para download"))
+    # resolve o TSP
+    log.info("🚦 Resolvendo TSP…")
+    route = solve_tsp(dist, 0, best)
+    if not route:
+        log.error("❌ TSP falhou")
+        return
+    route.append(end_idx)
+
+    # gera e salva o mapa
+    log.info("🗺️ Gerando mapa…")
+    m = build_map(route, coords, names)
+    filename = "rota_otimizada.html"
+    m.save(filename)
+    log.info(f"✅ HTML salvo: {filename}")
+    display(FileLink(filename, result_html_prefix="🔗 ", result_html_suffix=" para download"))
 
 # Conecta callbacks e exibe a interface
 load_pois_btn.on_click(on_load_pois)
