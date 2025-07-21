@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""
-Roteirização interativa de bares e restaurantes (100% gratuito)
+"""Roteirização interativa de bares e restaurantes (100% gratuito).
+
 Este script combina coleta de POIs, geocoding, cálculo de altitudes,
 matriz de distâncias, otimização de rota e geração de mapa HTML.
 Comentários simples explicam cada bloco de forma acessível.
@@ -17,6 +17,7 @@ from IPython.display import display, clear_output, FileLink  # para mostrar resu
 from geopy.geocoders import Nominatim, Photon  # geocoders do OpenStreetMap
 from geopy.exc import GeocoderTimedOut  # exceção de timeout no geopy
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2  # OR-Tools para TSP
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------
 # Configura sessão HTTP com retries
@@ -40,17 +41,18 @@ geolocator = Nominatim(user_agent="tsp_app", timeout=10)
 photon = Photon(user_agent="tsp_app", timeout=10)
 _city_geolocator = Nominatim(user_agent="tsp_app_bbox", timeout=10)
 # Guarda endereços já geocodificados para não repetir chamadas
-_cache_geo = {}
+_cache_geo: Dict[str, Tuple[float, float]] = {}
 
 # -----------------------------------------------------------------------
 # 1) Funções de geocoding e bounding box
 # -----------------------------------------------------------------------
 
-def get_city_bbox(city_name):
-    """
-    Pega a bounding box (sul, norte, oeste, leste) de uma cidade.
-    Usa Nominatim para obter limites administrativos.
-    Retorna tupla (south, north, west, east) ou None.
+def get_city_bbox(city_name: str) -> Optional[Tuple[float, float, float, float]]:
+    """Return the city's bounding box.
+
+    Utiliza o Nominatim para obter os limites administrativos e
+    devolve ``(south, north, west, east)`` caso encontrado,
+    senão ``None``.
     """
     loc = _city_geolocator.geocode(
         {"city": city_name, "state": "Minas Gerais", "country": "Brazil"},
@@ -62,18 +64,17 @@ def get_city_bbox(city_name):
     return float(sb), float(nb), float(wb), float(eb)
 
 
-def dentro_da_cidade(lat, lon, bbox):
-    """
-    Verifica se uma coordenada está dentro da bounding box.
-    """
+def dentro_da_cidade(lat: float, lon: float, bbox: Tuple[float, float, float, float]) -> bool:
+    """Check if a point is inside the bounding box."""
     s, n, w, e = bbox
     return s <= lat <= n and w <= lon <= e
 
 
-def geocode_strict_single(address, city):
-    """
-    Geocoding estrito usando viewbox e bounded para limitar à cidade.
-    Guarda resultado em cache para evitar duplicações.
+def geocode_strict_single(address: str, city: str) -> Optional[Tuple[float, float]]:
+    """Geocode de forma restrita dentro da cidade.
+
+    Primeiro utiliza ``viewbox`` e ``bounded`` para limitar a busca e
+    armazena o resultado em cache para evitar chamadas repetidas.
     """
     key = f"strict|{address}|{city}"
     if key in _cache_geo:
@@ -96,10 +97,11 @@ def geocode_strict_single(address, city):
     return None
 
 
-def geocode_fallback_single(address, city):
-    """
-    Geocoding de fallback: tenta Nominatim "normal" e depois Photon.
-    Também valida dentro da bounding box.
+def geocode_fallback_single(address: str, city: str) -> Optional[Tuple[float, float]]:
+    """Geocode com métodos de fallback.
+
+    Primeiro usa o Nominatim "normal" e, caso falhe, consulta o Photon.
+    Ambos os resultados são conferidos contra a bounding box da cidade.
     """
     key = f"fallback|{address}|{city}"
     if key in _cache_geo:
@@ -128,11 +130,11 @@ def geocode_fallback_single(address, city):
 # 2) Coletar POIs com Overpass + filtro por bounding box
 # -----------------------------------------------------------------------
 
-def coletar_pois(cidade):
-    """
-    Monta query Overpass para buscar bares e bebidas na city bbox.
-    Filtra resultados sem nome ou fora da bounding box.
-    Retorna lista de dicts com 'name', 'lat', 'lon'.
+def coletar_pois(cidade: str) -> List[Dict[str, Any]]:
+    """Coleta POIs de bares e similares via Overpass.
+
+    Monta uma consulta considerando a bounding box da cidade e filtra
+    resultados sem nome ou fora da área delimitada.
     """
     bbox = get_city_bbox(cidade)
     if bbox:
@@ -187,10 +189,11 @@ def coletar_pois(cidade):
 # 3) Altitudes em lote com Open-Elevation
 # -----------------------------------------------------------------------
 
-def batch_altitude(latlons):
-    """
-    Recebe lista de (lat, lon) e retorna lista de altitudes.
-    Em caso de erro, retorna zeros.
+def batch_altitude(latlons: List[Tuple[float, float]]) -> List[float]:
+    """Retorna altitudes para várias coordenadas.
+
+    Recebe uma lista ``[(lat, lon), ...]`` e devolve uma lista de
+    altitudes. Caso a API falhe, os valores retornados serão ``0``.
     """
     locs = [{"latitude": lat, "longitude": lon} for lat, lon in latlons]
     resp = session.post(
@@ -206,10 +209,11 @@ def batch_altitude(latlons):
 # 4) Matriz de distâncias via OSRM Table (com retries e fallback)
 # -----------------------------------------------------------------------
 
-def osrm_table(latlons, timeout=30):
-    """
-    Tenta obter matriz completa de distâncias.
-    Se falhar (timeout ou HTTP error), faz consulta linha a linha.
+def osrm_table(latlons: List[Tuple[float, float]], timeout: int = 30) -> List[List[float]]:
+    """Recupera matriz de distâncias via OSRM.
+
+    Tenta obter toda a matriz de uma vez; em caso de erro,
+    realiza consultas individuais para cada origem.
     """
     coord_str = ";".join(f"{lon},{lat}" for lat, lon in latlons)
     url = f"http://router.project-osrm.org/table/v1/foot/{coord_str}"
@@ -235,10 +239,16 @@ def osrm_table(latlons, timeout=30):
 # 5) Solução TSP com OR-Tools
 # -----------------------------------------------------------------------
 
-def solve_tsp(dist_matrix, start, end, time_limit_s=5):
-    """
-    Resolve o TSP fixando início e fim,
-    retorna lista de índices representando a ordem.
+def solve_tsp(
+    dist_matrix: List[List[float]],
+    start: int,
+    end: int,
+    time_limit_s: int = 5,
+) -> Optional[List[int]]:
+    """Resolve o TSP com início e término definidos.
+
+    Retorna a sequência de índices que formam a rota ou ``None`` caso
+    não seja encontrada solução dentro do limite de tempo.
     """
     n = len(dist_matrix)
     mgr = pywrapcp.RoutingIndexManager(n, 1, [start], [end])
@@ -269,10 +279,14 @@ def solve_tsp(dist_matrix, start, end, time_limit_s=5):
 # 6) Geração do mapa final com Folium
 # -----------------------------------------------------------------------
 
-def fetch_route_geometry(a, b):
-    """
-    Busca linha de caminho entre dois pontos via OSRM Route API.
-    Retorna lista de tuplas (lat, lon).
+def fetch_route_geometry(
+    a: Tuple[float, float],
+    b: Tuple[float, float],
+) -> List[Tuple[float, float]]:
+    """Recupera o traçado da rota entre dois pontos.
+
+    Consulta a API de rota do OSRM e devolve uma sequência de
+    coordenadas ``(lat, lon)`` que compõem o caminho.
     """
     url = f"http://router.project-osrm.org/route/v1/foot/{a[1]},{a[0]};{b[1]},{b[0]}"
     resp = session.get(
@@ -285,10 +299,15 @@ def fetch_route_geometry(a, b):
     return [(lat, lng) for lng, lat in coords]
 
 
-def build_map(route_idx, coords, names):
-    """
-    Desenha marcadores de partida, POIs ordenados e destino,
-    além de polylines para cada trecho do TSP.
+def build_map(
+    route_idx: List[int],
+    coords: List[Tuple[float, float, float]],
+    names: List[str],
+) -> folium.Map:
+    """Constrói o mapa final com marcadores e rota.
+
+    Desenha os pontos de partida e destino, bem como cada POI
+    na ordem otimizada, além das linhas que representam o caminho.
     """
     # inicia mapa centrado na partida
     m = folium.Map(location=coords[0][:2], zoom_start=14)
@@ -311,7 +330,7 @@ def build_map(route_idx, coords, names):
     ).add_to(m)
     # desenha linhas entre cada par de pontos
     for a, b in zip(route_idx, route_idx[1:]):
-        segment = fetch_route_geometry(coords[a], coords[b])
+        segment = fetch_route_geometry(coords[a][:2], coords[b][:2])
         folium.PolyLine(segment, weight=4, opacity=0.7).add_to(m)
     return m
 
@@ -329,10 +348,11 @@ end_txt        = widgets.Text(placeholder="Ex.: Rua Barão…, 208", description
 same_cb        = widgets.Checkbox(description="Partida = Destino")
 compute_btn    = widgets.Button(description="Gerar HTML", button_style="success")
 out            = widgets.Output()
-pois_checkboxes= []  # lista de caixas de seleção para os POIs
+pois_checkboxes: List[widgets.Checkbox] = []  # lista de caixas de seleção para os POIs
 
 # Função para buscar e listar POIs na interface
-def on_load_pois(_):
+def on_load_pois(_: Any) -> None:
+    """Busca POIs e atualiza a lista de seleções."""
     with out:
         clear_output()
         print(f"🔍 Buscando POIs em {city_widget.value}…")
@@ -348,13 +368,15 @@ def on_load_pois(_):
         print(f"✅ {len(pois)} POIs carregados.")
 
 # Sincroniza valor de destino com partida se checkbox marcado
-def on_same_change(change):
+def on_same_change(change: Dict[str, Any]) -> None:
+    """Atualiza o campo de destino quando o checkbox é marcado."""
     end_txt.disabled = change['new']
     if change['new']:
         end_txt.value = start_txt.value
 
 # Função principal que roda quando clica em "Gerar HTML"
-def on_compute(_):
+def on_compute(_: Any) -> None:
+    """Processa todos os passos de geração da rota."""
     with out:
         clear_output()
         # leitura de inputs
@@ -373,33 +395,35 @@ def on_compute(_):
             return
 
         # monta lista de coordenadas e nomes
-        coords = [(pt0[0], pt0[1])]
+        coords_latlon: List[Tuple[float, float]] = [(pt0[0], pt0[1])]
         names = ["Partida"]
         for cb in pois_checkboxes:
             if cb.value:
                 nm, coord = cb.description.split(' (')
                 lat, lon = coord[:-1].split(',')
-                coords.append((float(lat), float(lon)))
+                coords_latlon.append((float(lat), float(lon)))
                 names.append(nm)
         # adiciona extras digitados
         extras = [l.strip() for l in custom_txt.value.splitlines() if l.strip()]
         for ex in extras:
             geo = geocode_strict_single(ex, city) or geocode_fallback_single(ex, city)
             if geo:
-                coords.append((geo[0], geo[1]))
+                coords_latlon.append((geo[0], geo[1]))
                 names.append(ex)
 
-        coords.append((pt1[0], pt1[1]))
+        coords_latlon.append((pt1[0], pt1[1]))
         names.append("Destino")
 
-        if len(coords) < 3:
+        if len(coords_latlon) < 3:
             print("❌ Selecione ao menos um POI ou extra.")
             return
 
         # obtém altitudes e incorpora a tupla (lat, lon, alt)
         print("⏳ Obtendo altitudes…")
-        alts = batch_altitude(coords)
-        coords = [(lat, lon, alt) for (lat, lon), alt in zip(coords, alts)]
+        alts = batch_altitude(coords_latlon)
+        coords: List[Tuple[float, float, float]] = [
+            (lat, lon, alt) for (lat, lon), alt in zip(coords_latlon, alts)
+        ]
 
         # calcula matriz de distâncias
         print("⏳ Calculando matriz…")
