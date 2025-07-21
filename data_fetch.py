@@ -6,7 +6,13 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from geocoding import get_city_bbox, dentro_da_cidade
+from geocoding import (
+    get_city_bbox,
+    dentro_da_cidade,
+    get_city_area_id,
+    get_city_polygon,
+    point_in_polygon,
+)
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +27,27 @@ session.mount("https://", adapter)
 def coletar_pois(cidade: str) -> List[dict]:
     """Busca bares e restaurantes via Overpass."""
     bbox = get_city_bbox(cidade)
-    if bbox:
+    area_id = get_city_area_id(cidade)
+    poly = get_city_polygon(cidade)
+    if area_id:
+        q = f"""
+        [out:json][timeout:60];
+        area({area_id})->.a;
+        (
+          node[\"amenity\"=\"bar\"](area.a);
+          way[\"amenity\"=\"bar\"](area.a);
+          rel[\"amenity\"=\"bar\"](area.a);
+          node[\"bar\"=\"yes\"](area.a);
+          node[\"craft\"=\"brewery\"](area.a);
+          node[\"shop\"=\"alcohol\"](area.a);
+          node[\"amenity\"=\"pub\"](area.a);
+          node[\"amenity\"=\"cafe\"](area.a);
+          node[\"amenity\"=\"fast_food\"](area.a);
+          node[\"amenity\"=\"nightclub\"](area.a);
+        );
+        out center tags;
+        """
+    elif bbox:
         s, n, w, e = bbox
         q = f"""
         [out:json][timeout:60];
@@ -63,14 +89,18 @@ def coletar_pois(cidade: str) -> List[dict]:
 
     pois_by_name = {}
     for el in elements:
-        name = el.get("tags", {}).get("name")
+        tags = el.get("tags", {})
+        name = tags.get("name")
         lat = el.get("lat") or el.get("center", {}).get("lat")
         lon = el.get("lon") or el.get("center", {}).get("lon")
         if not (name and lat and lon):
             continue
-        inside = not bbox or dentro_da_cidade(float(lat), float(lon), bbox)
-        if not inside:
-            # se existir duplicata dentro da bbox, manteremos apenas ela
+        city_tag = tags.get("addr:city")
+        if city_tag and city_tag.lower() != cidade.lower():
+            continue
+        if poly and not point_in_polygon(float(lat), float(lon), poly):
+            continue
+        if bbox and not poly and not dentro_da_cidade(float(lat), float(lon), bbox):
             continue
         if name not in pois_by_name:
             pois_by_name[name] = {

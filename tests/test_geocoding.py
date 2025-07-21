@@ -35,3 +35,28 @@ def test_geocode_fallback_photon():
             geocoding._cache_geo.clear()
             result = geocoding.geocode_fallback_single('addr', 'city')
             assert result == (3.0, 4.0)
+
+
+def test_geocode_city_mismatch():
+    loc = FakeLoc(1.0, 2.0)
+    loc.raw = {"address": {"city": "Outra"}}
+    with mock.patch('geocoding.geocode_rl', return_value=loc):
+        with mock.patch('geocoding.get_city_bbox', return_value=(-2, 2, -2, 2)):
+            with mock.patch('geocoding.get_city_polygon', return_value=None):
+                geocoding._cache_geo.clear()
+                assert geocoding.geocode_strict_single('addr', 'city') is None
+
+
+def test_geocode_polygon_filter():
+    loc = FakeLoc(5.0, 5.0)
+    loc.raw = {"address": {"city": "city"}}
+
+    class DummyPoly:
+        def contains(self, pt):
+            return False
+
+    with mock.patch('geocoding.geocode_rl', return_value=loc):
+        with mock.patch('geocoding.get_city_bbox', return_value=None):
+            with mock.patch('geocoding.get_city_polygon', return_value=DummyPoly()):
+                geocoding._cache_geo.clear()
+                assert geocoding.geocode_strict_single('addr', 'city') is None

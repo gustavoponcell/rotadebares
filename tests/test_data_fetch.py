@@ -52,3 +52,38 @@ def test_coletar_pois_dedup_inside():
          mock.patch("data_fetch.session.post", return_value=resp):
         pois = data_fetch.coletar_pois("cidade")
         assert pois == [{"name": "Bar1", "lat": 1.0, "lon": 1.0}]
+
+
+def test_coletar_pois_addr_city():
+    elements = [
+        {"tags": {"name": "Bar1", "addr:city": "cidade"}, "lat": 1, "lon": 1},
+        {"tags": {"name": "Bar2", "addr:city": "Outra"}, "lat": 1.5, "lon": 1.5},
+    ]
+    resp = FakeResp({"elements": elements})
+    bbox = (0, 2, 0, 2)
+    with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
+         mock.patch("data_fetch.get_city_area_id", return_value=None), \
+         mock.patch("data_fetch.get_city_polygon", return_value=None), \
+         mock.patch("data_fetch.session.post", return_value=resp):
+        pois = data_fetch.coletar_pois("cidade")
+        assert pois == [{"name": "Bar1", "lat": 1.0, "lon": 1.0}]
+
+
+def test_coletar_pois_polygon():
+    elements = [
+        {"tags": {"name": "Bar1"}, "lat": 1, "lon": 1},
+        {"tags": {"name": "Bar2"}, "lat": 5, "lon": 5},
+    ]
+    resp = FakeResp({"elements": elements})
+
+    class DummyPoly:
+        def contains(self, pt):
+            x, y = pt.x, pt.y
+            return 0 <= y <= 2 and 0 <= x <= 2
+
+    with mock.patch("data_fetch.get_city_bbox", return_value=None), \
+         mock.patch("data_fetch.get_city_area_id", return_value=1), \
+         mock.patch("data_fetch.get_city_polygon", return_value=DummyPoly()), \
+         mock.patch("data_fetch.session.post", return_value=resp):
+        pois = data_fetch.coletar_pois("cidade")
+        assert pois == [{"name": "Bar1", "lat": 1.0, "lon": 1.0}]
