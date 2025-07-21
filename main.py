@@ -7,6 +7,7 @@ Comentários simples explicam cada bloco de forma acessível.
 """
 
 import os  # para acessar variáveis de ambiente, se for usar outras APIs
+from functools import lru_cache  # cache para funções de geocoding
 import requests  # para chamadas HTTP (Overpass, OSRM, Open-Elevation)
 from requests.adapters import HTTPAdapter  # para configurar retries automáticos
 from urllib3.util.retry import Retry  # política de retry (backoff)
@@ -46,6 +47,7 @@ _cache_geo = {}
 # 1) Funções de geocoding e bounding box
 # -----------------------------------------------------------------------
 
+@lru_cache(maxsize=64)
 def get_city_bbox(city_name):
     """
     Pega a bounding box (sul, norte, oeste, leste) de uma cidade.
