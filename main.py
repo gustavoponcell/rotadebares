@@ -16,6 +16,7 @@ from tqdm.notebook import tqdm  # para barras de progresso
 from IPython.display import display, clear_output, FileLink  # para mostrar resultados
 from geopy.geocoders import Nominatim, Photon  # geocoders do OpenStreetMap
 from geopy.exc import GeocoderTimedOut  # exceção de timeout no geopy
+from geopy.extra.rate_limiter import RateLimiter  # controle de chamadas
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2  # OR-Tools para TSP
 
 # ---------------------
@@ -39,6 +40,9 @@ session.mount("https://", adapter)
 geolocator = Nominatim(user_agent="tsp_app", timeout=10)
 photon = Photon(user_agent="tsp_app", timeout=10)
 _city_geolocator = Nominatim(user_agent="tsp_app_bbox", timeout=10)
+# Controle de taxa para geocoders (1 requisição/seg)
+geocode_rl = RateLimiter(geolocator.geocode, min_delay_seconds=1)
+photon_geocode_rl = RateLimiter(photon.geocode, min_delay_seconds=1)
 # Guarda endereços já geocodificados para não repetir chamadas
 _cache_geo = {}
 
@@ -84,11 +88,11 @@ def geocode_strict_single(address, city):
         if bbox:
             sb, nb, wb, eb = bbox
             viewbox = [(sb, wb), (nb, eb)]
-            loc = geolocator.geocode(
+            loc = geocode_rl(
                 params, exactly_one=True, viewbox=viewbox, bounded=True
             )
         else:
-            loc = geolocator.geocode(params, exactly_one=True)
+            loc = geocode_rl(params, exactly_one=True)
         if loc and (not bbox or dentro_da_cidade(loc.latitude, loc.longitude, bbox)):
             return _cache_geo.setdefault(key, (loc.latitude, loc.longitude))
     except GeocoderTimedOut:
@@ -107,7 +111,7 @@ def geocode_fallback_single(address, city):
     bbox = get_city_bbox(city)
     # 1) Nominatim sem viewbox
     try:
-        loc = geolocator.geocode(
+        loc = geocode_rl(
             {"street": address, "city": city, "state": "Minas Gerais", "country": "Brazil"},
             exactly_one=True
         )
@@ -117,7 +121,7 @@ def geocode_fallback_single(address, city):
         pass
     # 2) Photon
     try:
-        loc2 = photon.geocode(f"{address}, {city}, MG, Brazil", exactly_one=True)
+        loc2 = photon_geocode_rl(f"{address}, {city}, MG, Brazil", exactly_one=True)
         if loc2 and (not bbox or dentro_da_cidade(loc2.latitude, loc2.longitude, bbox)):
             return _cache_geo.setdefault(key, (loc2.latitude, loc2.longitude))
     except Exception:
