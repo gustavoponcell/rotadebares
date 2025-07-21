@@ -31,6 +31,11 @@ Execute `main.py` a partir de um notebook (Colab ou Jupyter):
 %run main.py
 ```
 
+Para cenários onde a latência das chamadas HTTP seja relevante, o módulo
+`async_fetch.py` disponibiliza versões assíncronas das funções de coleta de
+dados. Elas utilizam `aiohttp` e podem ser chamadas dentro de um loop
+`asyncio` para maior desempenho.
+
 Uma interface será exibida para seleção de cidade e POIs. Ao final do processamento será gerado o arquivo `rota_otimizada.html` com o mapa da rota otimizada.
 
 ### Algoritmos de Roteirização
