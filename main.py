@@ -10,6 +10,7 @@ import os  # para acessar variáveis de ambiente, se for usar outras APIs
 import requests  # para chamadas HTTP (Overpass, OSRM, Open-Elevation)
 from requests.adapters import HTTPAdapter  # para configurar retries automáticos
 from urllib3.util.retry import Retry  # política de retry (backoff)
+from loguru import logger
 import folium  # para desenhar mapas interativos e marcadores
 import ipywidgets as widgets  # para UI interativa no Colab
 from tqdm.notebook import tqdm  # para barras de progresso
@@ -164,12 +165,18 @@ def coletar_pois(cidade):
         );
         out center tags;
         """
-    resp = session.post(
-        "http://overpass-api.de/api/interpreter",
-        data={"data": q}, timeout=60
-    )
+    try:
+        resp = session.post(
+            "http://overpass-api.de/api/interpreter",
+            data={"data": q}, timeout=60
+        )
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as exc:
+        logger.error(f"Overpass request failed: {exc}")
+        return []
+
     pois = []
-    if resp.status_code == 200:
+    try:
         for el in resp.json().get("elements", []):
             name = el.get("tags", {}).get("name")
             # extrai coordenadas, seja em node ou em center de way/rel
@@ -181,6 +188,9 @@ def coletar_pois(cidade):
             if bbox and not dentro_da_cidade(lat, lon, bbox):
                 continue
             pois.append({"name": name, "lat": float(lat), "lon": float(lon)})
+    except Exception as exc:
+        logger.error(f"Failed parsing Overpass response: {exc}")
+        return []
     return pois
 
 # -----------------------------------------------------------------------
@@ -193,14 +203,18 @@ def batch_altitude(latlons):
     Em caso de erro, retorna zeros.
     """
     locs = [{"latitude": lat, "longitude": lon} for lat, lon in latlons]
-    resp = session.post(
-        "https://api.open-elevation.com/api/v1/lookup",
-        json={"locations": locs}, timeout=30
-
-    )
-    if resp.status_code != 200:
-        return [0] * len(locs)
-    return [r.get("elevation", 0) for r in resp.json().get("results", [])]
+    try:
+        resp = session.post(
+            "https://api.open-elevation.com/api/v1/lookup",
+            json={"locations": locs}, timeout=30
+        )
+        resp.raise_for_status()
+        return [r.get("elevation", 0) for r in resp.json().get("results", [])]
+    except requests.exceptions.RequestException as exc:
+        logger.error(f"Open-Elevation request failed: {exc}")
+    except Exception as exc:
+        logger.error(f"Failed parsing elevation response: {exc}")
+    return [0] * len(locs)
 
 # -----------------------------------------------------------------------
 # 4) Matriz de distâncias via OSRM Table (com retries e fallback)
@@ -218,10 +232,13 @@ def osrm_table(latlons, timeout=30):
         resp = session.get(url, params=params, timeout=timeout)
         resp.raise_for_status()
         return resp.json().get("distances", [])
-    except (requests.exceptions.ReadTimeout, requests.exceptions.HTTPError):
-        # quebra em n requisições para cada fonte
-        full = []
-        for i in range(len(latlons)):
+    except requests.exceptions.RequestException as exc:
+        logger.error(f"OSRM table full request failed: {exc}")
+
+    # quebra em n requisições para cada fonte
+    full = []
+    for i in range(len(latlons)):
+        try:
             r = session.get(
                 url,
                 params={"annotations": "distance", "sources": i},
@@ -229,7 +246,10 @@ def osrm_table(latlons, timeout=30):
             )
             r.raise_for_status()
             full.append(r.json().get("distances", [[0]*len(latlons)])[0])
-        return full
+        except requests.exceptions.RequestException as exc:
+            logger.error(f"OSRM table row {i} failed: {exc}")
+            full.append([0] * len(latlons))
+    return full
 
 # -----------------------------------------------------------------------
 # 5) Solução TSP com OR-Tools
