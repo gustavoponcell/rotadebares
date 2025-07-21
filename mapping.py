@@ -29,6 +29,19 @@ def fetch_route_geometry(a: Tuple[float, float], b: Tuple[float, float]) -> List
 
 
 def fetch_route_geometry_multi(points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    """Obtém a geometria de uma rota que passa por ``points``.
+
+    Parameters
+    ----------
+    points:
+        Lista ordenada de pares ``(lat, lon)`` que compõem a rota.
+
+    Returns
+    -------
+    List[Tuple[float, float]]
+        Coordenadas da linha da rota no formato ``(lat, lon)``.
+    """
+
     coord_str = ";".join(f"{lon},{lat}" for lat, lon in points)
     url = f"http://router.project-osrm.org/route/v1/foot/{coord_str}"
     try:
@@ -44,6 +57,23 @@ def fetch_route_geometry_multi(points: List[Tuple[float, float]]) -> List[Tuple[
 
 
 def build_map(route_idx: List[int], coords: List[Tuple[float, float, float]], names: List[str]) -> folium.Map:
+    """Monta o mapa interativo da rota.
+
+    Parameters
+    ----------
+    route_idx:
+        Sequência de índices que define a ordem de visita.
+    coords:
+        Lista de tuplas ``(lat, lon, alt)`` correspondentes a cada ponto.
+    names:
+        Nomes dos locais exibidos no mapa.
+
+    Returns
+    -------
+    folium.Map
+        Mapa com marcadores e a linha da rota.
+    """
+
     m = folium.Map(location=coords[0][:2], zoom_start=14)
     folium.Marker(coords[0][:2], tooltip="Partida", icon=folium.Icon(color="green", icon="play")).add_to(m)
     for seq, idx in enumerate(route_idx[1:-1], start=1):
