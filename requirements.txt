@@ -8,3 +8,4 @@ aiohttp
 python-dotenv
 loguru
 networkx
+pytest-asyncio

@@ -25,3 +25,30 @@ def test_osrm_table_fallback():
     with mock.patch('data_fetch.session.get', side_effect=side_effect):
         result = data_fetch.osrm_table([(0,0), (1,1)])
         assert result == [[0,1],[10,11]]
+
+
+def test_coletar_pois_bbox_filtering():
+    elements = [
+        {"tags": {"name": "Bar1"}, "lat": 1, "lon": 1},  # inside
+        {"tags": {"name": "Bar1"}, "lat": 5, "lon": 5},  # outside dup
+        {"tags": {"name": "Bar2"}, "lat": 5, "lon": 5},  # outside only
+    ]
+    resp = FakeResp({"elements": elements})
+    bbox = (0, 2, 0, 2)
+    with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
+         mock.patch("data_fetch.session.post", return_value=resp):
+        pois = data_fetch.coletar_pois("cidade")
+        assert pois == [{"name": "Bar1", "lat": 1.0, "lon": 1.0}]
+
+
+def test_coletar_pois_dedup_inside():
+    elements = [
+        {"tags": {"name": "Bar1"}, "lat": 1, "lon": 1},
+        {"tags": {"name": "Bar1"}, "lat": 1.1, "lon": 1.1},
+    ]
+    resp = FakeResp({"elements": elements})
+    bbox = (0, 2, 0, 2)
+    with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
+         mock.patch("data_fetch.session.post", return_value=resp):
+        pois = data_fetch.coletar_pois("cidade")
+        assert pois == [{"name": "Bar1", "lat": 1.0, "lon": 1.0}]

@@ -61,17 +61,24 @@ def coletar_pois(cidade: str) -> List[dict]:
         log.error(f"Erro ao decodificar resposta Overpass: {e}")
         return []
 
-    pois = []
+    pois_by_name = {}
     for el in elements:
         name = el.get("tags", {}).get("name")
         lat = el.get("lat") or el.get("center", {}).get("lat")
         lon = el.get("lon") or el.get("center", {}).get("lon")
         if not (name and lat and lon):
             continue
-        if bbox and not dentro_da_cidade(lat, lon, bbox):
+        inside = not bbox or dentro_da_cidade(float(lat), float(lon), bbox)
+        if not inside:
+            # se existir duplicata dentro da bbox, manteremos apenas ela
             continue
-        pois.append({"name": name, "lat": float(lat), "lon": float(lon)})
-    return pois
+        if name not in pois_by_name:
+            pois_by_name[name] = {
+                "name": name,
+                "lat": float(lat),
+                "lon": float(lon),
+            }
+    return list(pois_by_name.values())
 
 
 def batch_altitude(latlons: List[Tuple[float, float]]) -> List[float]:
