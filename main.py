@@ -20,6 +20,7 @@ from geopy.geocoders import Nominatim, Photon  # geocoders do OpenStreetMap
 from geopy.exc import GeocoderTimedOut  # exceção de timeout no geopy
 from geopy.extra.rate_limiter import RateLimiter  # controle de chamadas
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2  # OR-Tools para TSP
+from concurrent.futures import ThreadPoolExecutor, as_completed  # paralelizar fallback
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -247,24 +248,30 @@ def osrm_table(latlons, timeout=30):
         return resp.json().get("distances", [])
     except requests.RequestException as e:
         log.warning(f"OSRM Table falhou, tentando linha a linha: {e}")
-        full = []
-        for i in range(len(latlons)):
+
+        def fetch_row(i):
             try:
                 r = session.get(
                     url,
                     params={"annotations": "distance", "sources": i},
-                    timeout=timeout
+                    timeout=timeout,
                 )
                 r.raise_for_status()
-                row = r.json().get("distances", [[0] * len(latlons)])[0]
-            except requests.RequestException as e2:
-                log.error(f"OSRM Table linha {i} falhou: {e2}")
-                return [[0] * len(latlons) for _ in latlons]
-            except Exception as e2:
-                log.error(f"Erro ao processar resposta OSRM linha {i}: {e2}")
-                return [[0] * len(latlons) for _ in latlons]
-            full.append(row)
-        return full
+                return i, r.json().get("distances", [[0] * len(latlons)])[0]
+            except Exception as exc:
+                log.error(f"OSRM Table linha {i} falhou: {exc}")
+                return i, None
+
+        results = [None] * len(latlons)
+        with ThreadPoolExecutor(max_workers=min(4, len(latlons))) as ex:
+            futures = [ex.submit(fetch_row, i) for i in range(len(latlons))]
+            for fut in as_completed(futures):
+                idx, row = fut.result()
+                if row is None:
+                    return [[0] * len(latlons) for _ in latlons]
+                results[idx] = row
+
+        return results
     except Exception as e:
         log.error(f"Erro ao processar resposta OSRM: {e}")
         return [[0] * len(latlons) for _ in latlons]
