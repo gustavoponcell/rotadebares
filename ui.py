@@ -12,11 +12,23 @@ log = logging.getLogger(__name__)
 
 
 class WidgetHandler(logging.Handler):
-    def __init__(self, widget):
+    """Handler que redireciona logs para um ``ipywidgets.Output``."""
+
+    def __init__(self, widget: widgets.Output) -> None:
+        """Inicializa o handler.
+
+        Parameters
+        ----------
+        widget:
+            Widget que exibirá as mensagens de log.
+        """
+
         super().__init__()
         self.widget = widget
 
-    def emit(self, record):
+    def emit(self, record: logging.LogRecord) -> None:
+        """Imprime a mensagem formatada dentro do widget."""
+
         msg = self.format(record)
         with self.widget:
             print(msg)
@@ -39,7 +51,9 @@ log.addHandler(widget_handler)
 log.propagate = False
 
 
-def on_load_pois(_):
+def on_load_pois(_: widgets.Button) -> None:
+    """Carrega a lista de POIs disponíveis para a cidade informada."""
+
     with out:
         clear_output()
     log.info(f"🔍 Buscando POIs em {city_widget.value}…")
@@ -55,13 +69,17 @@ def on_load_pois(_):
     log.info(f"✅ {len(pois)} POIs carregados.")
 
 
-def on_same_change(change):
+def on_same_change(change: dict) -> None:
+    """Sincroniza partida e destino quando o checkbox é marcado."""
+
     end_txt.disabled = change['new']
     if change['new']:
         end_txt.value = start_txt.value
 
 
-def on_compute(_):
+def on_compute(_: widgets.Button) -> None:
+    """Processa todos os passos e gera o HTML da rota."""
+
     with out:
         clear_output()
 
@@ -126,15 +144,21 @@ def on_compute(_):
     display(FileLink(filename, result_html_prefix="🔗 ", result_html_suffix=" para download"))
 
 
-def launch_ui():
+def launch_ui() -> None:
+    """Exibe a interface interativa no notebook."""
+
     load_pois_btn.on_click(on_load_pois)
-    same_cb.observe(on_same_change, 'value')
+    same_cb.observe(on_same_change, "value")
     compute_btn.on_click(on_compute)
 
-    ui = widgets.HBox([
-        widgets.VBox([city_widget, load_pois_btn, widgets.Label("Selecione POIs:"), pois_box]),
-        widgets.VBox([start_txt, end_txt, same_cb, custom_txt, compute_btn])
-    ])
+    ui = widgets.HBox(
+        [
+            widgets.VBox(
+                [city_widget, load_pois_btn, widgets.Label("Selecione POIs:"), pois_box]
+            ),
+            widgets.VBox([start_txt, end_txt, same_cb, custom_txt, compute_btn]),
+        ]
+    )
     display(ui, out)
 
 __all__ = ["launch_ui"]

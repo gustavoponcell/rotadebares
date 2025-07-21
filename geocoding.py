@@ -33,6 +33,21 @@ def get_city_bbox(city_name: str) -> Optional[Tuple[float, float, float, float]]
 
 
 def dentro_da_cidade(lat: float, lon: float, bbox: Tuple[float, float, float, float]) -> bool:
+    """Verifica se a coordenada esta dentro dos limites da ``bbox``.
+
+    Parameters
+    ----------
+    lat, lon:
+        Coordenadas a validar.
+    bbox:
+        Limites da cidade (sul, norte, oeste, leste).
+
+    Returns
+    -------
+    bool
+        ``True`` se a coordenada estiver dentro da ``bbox``.
+    """
+
     s, n, w, e = bbox
     return s <= lat <= n and w <= lon <= e
 

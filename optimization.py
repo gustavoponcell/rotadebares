@@ -3,8 +3,25 @@ from typing import List
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 
-def solve_tsp(dist_matrix: List[List[float]], start: int, end: int, time_limit_s: int = 5):
-    """Resolve o TSP fixando inicio e fim."""
+def solve_tsp(dist_matrix: List[List[float]], start: int, end: int, time_limit_s: int = 5) -> List[int] | None:
+    """Resolve o TSP fixando inicio e fim.
+
+    Parameters
+    ----------
+    dist_matrix:
+        Matriz de distâncias entre os pontos.
+    start:
+        Índice do ponto de partida.
+    end:
+        Índice do destino final.
+    time_limit_s:
+        Tempo limite de busca em segundos.
+
+    Returns
+    -------
+    list[int] | None
+        Ordem dos índices a serem visitados ou ``None`` em caso de falha.
+    """
     n = len(dist_matrix)
     mgr = pywrapcp.RoutingIndexManager(n, 1, [start], [end])
     routing = pywrapcp.RoutingModel(mgr)
