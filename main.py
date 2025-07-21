@@ -174,23 +174,34 @@ def coletar_pois(cidade):
         );
         out center tags;
         """
-    resp = session.post(
-        "http://overpass-api.de/api/interpreter",
-        data={"data": q}, timeout=60
-    )
+    try:
+        resp = session.post(
+            "http://overpass-api.de/api/interpreter",
+            data={"data": q}, timeout=60
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        log.error(f"Erro Overpass: {e}")
+        return []
+
     pois = []
-    if resp.status_code == 200:
-        for el in resp.json().get("elements", []):
-            name = el.get("tags", {}).get("name")
-            # extrai coordenadas, seja em node ou em center de way/rel
-            lat = el.get("lat") or el.get("center", {}).get("lat")
-            lon = el.get("lon") or el.get("center", {}).get("lon")
-            # só mantêm se tiver nome e coordenadas dentro da cidade
-            if not (name and lat and lon):
-                continue
-            if bbox and not dentro_da_cidade(lat, lon, bbox):
-                continue
-            pois.append({"name": name, "lat": float(lat), "lon": float(lon)})
+    try:
+        elements = resp.json().get("elements", [])
+    except Exception as e:  # JSONDecodeError etc
+        log.error(f"Erro ao decodificar resposta Overpass: {e}")
+        return []
+
+    for el in elements:
+        name = el.get("tags", {}).get("name")
+        # extrai coordenadas, seja em node ou em center de way/rel
+        lat = el.get("lat") or el.get("center", {}).get("lat")
+        lon = el.get("lon") or el.get("center", {}).get("lon")
+        # só mantêm se tiver nome e coordenadas dentro da cidade
+        if not (name and lat and lon):
+            continue
+        if bbox and not dentro_da_cidade(lat, lon, bbox):
+            continue
+        pois.append({"name": name, "lat": float(lat), "lon": float(lon)})
     return pois
 
 # -----------------------------------------------------------------------
@@ -203,14 +214,20 @@ def batch_altitude(latlons):
     Em caso de erro, retorna zeros.
     """
     locs = [{"latitude": lat, "longitude": lon} for lat, lon in latlons]
-    resp = session.post(
-        "https://api.open-elevation.com/api/v1/lookup",
-        json={"locations": locs}, timeout=30
+    try:
+        resp = session.post(
+            "https://api.open-elevation.com/api/v1/lookup",
+            json={"locations": locs}, timeout=30
 
-    )
-    if resp.status_code != 200:
-        return [0] * len(locs)
-    return [r.get("elevation", 0) for r in resp.json().get("results", [])]
+        )
+        resp.raise_for_status()
+        data = resp.json().get("results", [])
+        return [r.get("elevation", 0) for r in data]
+    except requests.RequestException as e:
+        log.error(f"Erro Open-Elevation: {e}")
+    except Exception as e:
+        log.error(f"Erro ao processar resposta Open-Elevation: {e}")
+    return [0] * len(locs)
 
 # -----------------------------------------------------------------------
 # 4) Matriz de distâncias via OSRM Table (com retries e fallback)
@@ -228,18 +245,29 @@ def osrm_table(latlons, timeout=30):
         resp = session.get(url, params=params, timeout=timeout)
         resp.raise_for_status()
         return resp.json().get("distances", [])
-    except (requests.exceptions.ReadTimeout, requests.exceptions.HTTPError):
-        # quebra em n requisições para cada fonte
+    except requests.RequestException as e:
+        log.warning(f"OSRM Table falhou, tentando linha a linha: {e}")
         full = []
         for i in range(len(latlons)):
-            r = session.get(
-                url,
-                params={"annotations": "distance", "sources": i},
-                timeout=timeout
-            )
-            r.raise_for_status()
-            full.append(r.json().get("distances", [[0]*len(latlons)])[0])
+            try:
+                r = session.get(
+                    url,
+                    params={"annotations": "distance", "sources": i},
+                    timeout=timeout
+                )
+                r.raise_for_status()
+                row = r.json().get("distances", [[0] * len(latlons)])[0]
+            except requests.RequestException as e2:
+                log.error(f"OSRM Table linha {i} falhou: {e2}")
+                return [[0] * len(latlons) for _ in latlons]
+            except Exception as e2:
+                log.error(f"Erro ao processar resposta OSRM linha {i}: {e2}")
+                return [[0] * len(latlons) for _ in latlons]
+            full.append(row)
         return full
+    except Exception as e:
+        log.error(f"Erro ao processar resposta OSRM: {e}")
+        return [[0] * len(latlons) for _ in latlons]
 
 # -----------------------------------------------------------------------
 # 5) Solução TSP com OR-Tools
@@ -285,26 +313,38 @@ def fetch_route_geometry(a, b):
     Retorna lista de tuplas (lat, lon).
     """
     url = f"http://router.project-osrm.org/route/v1/foot/{a[1]},{a[0]};{b[1]},{b[0]}"
-    resp = session.get(
-        url, params={"overview": "full", "geometries": "geojson"},
-        timeout=30
-    )
-    resp.raise_for_status()
-    coords = resp.json()["routes"][0]["geometry"]["coordinates"]
-    # converte [lon, lat] para (lat, lon)
-    return [(lat, lng) for lng, lat in coords]
+    try:
+        resp = session.get(
+            url, params={"overview": "full", "geometries": "geojson"},
+            timeout=30
+        )
+        resp.raise_for_status()
+        coords = resp.json()["routes"][0]["geometry"]["coordinates"]
+        # converte [lon, lat] para (lat, lon)
+        return [(lat, lng) for lng, lat in coords]
+    except requests.RequestException as e:
+        log.error(f"Erro OSRM Route: {e}")
+    except Exception as e:
+        log.error(f"Erro ao processar resposta OSRM Route: {e}")
+    return []
 
 
 def fetch_route_geometry_multi(points):
     """Busca caminho de uma sequência de pontos via OSRM."""
     coord_str = ";".join(f"{lon},{lat}" for lat, lon in points)
     url = f"http://router.project-osrm.org/route/v1/foot/{coord_str}"
-    resp = session.get(
-        url, params={"overview": "full", "geometries": "geojson"}, timeout=30
-    )
-    resp.raise_for_status()
-    coords = resp.json()["routes"][0]["geometry"]["coordinates"]
-    return [(lat, lng) for lng, lat in coords]
+    try:
+        resp = session.get(
+            url, params={"overview": "full", "geometries": "geojson"}, timeout=30
+        )
+        resp.raise_for_status()
+        coords = resp.json()["routes"][0]["geometry"]["coordinates"]
+        return [(lat, lng) for lng, lat in coords]
+    except requests.RequestException as e:
+        log.error(f"Erro OSRM Route múltiplo: {e}")
+    except Exception as e:
+        log.error(f"Erro ao processar resposta OSRM Route múltiplo: {e}")
+    return []
 
 
 def build_map(route_idx, coords, names):
