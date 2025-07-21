@@ -1,0 +1,9 @@
+requests
+geopy[rate_limiter]
+folium
+ortools
+ipywidgets
+tqdm
+aiohttp
+python-dotenv
+loguru
