@@ -38,6 +38,10 @@ dados. Elas utilizam `aiohttp` e podem ser chamadas dentro de um loop
 
 Uma interface será exibida para seleção de cidade e POIs. Ao final do processamento será gerado o arquivo `rota_otimizada.html` com o mapa da rota otimizada.
 
+O controle **Peso subida** permite penalizar trechos com ganho de altitude.
+Um valor maior faz o solver evitar rotas com subidas longas, somando
+`peso * ganho_de_altitude` à matriz de distâncias antes da otimização.
+
 ### Algoritmos de Roteirização
 
 O módulo `optimization.py` oferece diferentes estratégias para resolver o TSP. Além de `solve_tsp`, que utiliza a busca padrão do OR-Tools, estão disponíveis:

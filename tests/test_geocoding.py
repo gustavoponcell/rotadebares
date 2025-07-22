@@ -1,6 +1,8 @@
 import types
 from unittest import mock
-import geocoding
+import pytest
+
+geocoding = pytest.importorskip("geocoding")
 
 class FakeLoc:
     def __init__(self, lat, lon):

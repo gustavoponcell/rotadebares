@@ -1,6 +1,8 @@
 from unittest import mock
-import requests
-import data_fetch
+import pytest
+
+requests = pytest.importorskip("requests")
+data_fetch = pytest.importorskip("data_fetch")
 
 class FakeResp:
     def __init__(self, data):
