@@ -2,6 +2,8 @@ import logging
 from functools import lru_cache
 from typing import Optional, Tuple, Any
 
+import requests
+
 try:  # Shapely é opcional
     from shapely.geometry import Polygon, Point
 except Exception:  # pragma: no cover - biblioteca ausente
