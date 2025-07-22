@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Tuple
 
 import networkx as nx
 
@@ -50,7 +50,34 @@ def solve_tsp(dist_matrix: List[List[float]], start: int, end: int, time_limit_s
     route.append(mgr.IndexToNode(index))
     return route
 
-__all__ = ["solve_tsp"]
+__all__ = ["solve_tsp", "apply_elevation_penalty"]
+
+
+def apply_elevation_penalty(
+    dist_matrix: List[List[float]],
+    coords: List[Tuple[float, float, float]],
+    weight: float,
+) -> List[List[float]]:
+    """Aplica penalidade de subida na matriz de distâncias.
+
+    Para cada par ``i -> j`` adiciona ``weight * max(0, alt_j - alt_i)`` ao
+    valor original da matriz.
+    """
+
+    if weight <= 0:
+        return dist_matrix
+
+    n = len(dist_matrix)
+    alts = [c[2] for c in coords]
+    penal = [row[:] for row in dist_matrix]
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            gain = alts[j] - alts[i]
+            if gain > 0:
+                penal[i][j] += gain * weight
+    return penal
 
 
 def solve_tsp_guided_local_search(

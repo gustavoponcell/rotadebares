@@ -5,7 +5,7 @@ from IPython.display import display, clear_output, FileLink
 
 from geocoding import geocode_strict_single, geocode_fallback_single
 from data_fetch import coletar_pois, batch_altitude, osrm_table
-from optimization import solve_tsp
+from optimization import solve_tsp, apply_elevation_penalty
 from mapping import build_map
 
 log = logging.getLogger(__name__)
@@ -41,6 +41,13 @@ custom_txt = widgets.Textarea(placeholder="Extras (uma linha cada)", description
 start_txt = widgets.Text(placeholder="Ex.: Rua das Mercês, 310", description="Partida:")
 end_txt = widgets.Text(placeholder="Ex.: Rua Barão…, 208", description="Destino:")
 same_cb = widgets.Checkbox(description="Partida = Destino")
+elev_weight = widgets.FloatSlider(
+    value=0.0,
+    min=0.0,
+    max=5.0,
+    step=0.1,
+    description="Peso subida:",
+)
 compute_btn = widgets.Button(description="Gerar HTML", button_style="success")
 out = widgets.Output()
 pois_checkboxes = []
@@ -125,12 +132,14 @@ def on_compute(_: widgets.Button) -> None:
 
     log.info("⏳ Calculando matriz…")
     dist = osrm_table([(lat, lon) for lat, lon, _ in coords])
+    weight = float(elev_weight.value)
+    penal = apply_elevation_penalty(dist, coords, weight)
 
     end_idx = len(coords) - 1
-    best = min(range(1, end_idx), key=lambda i: dist[i][end_idx])
+    best = min(range(1, end_idx), key=lambda i: penal[i][end_idx])
 
     log.info("🚦 Resolvendo TSP…")
-    route = solve_tsp(dist, 0, best)
+    route = solve_tsp(penal, 0, best)
     if not route:
         log.error("❌ TSP falhou")
         return
@@ -156,7 +165,14 @@ def launch_ui() -> None:
             widgets.VBox(
                 [city_widget, load_pois_btn, widgets.Label("Selecione POIs:"), pois_box]
             ),
-            widgets.VBox([start_txt, end_txt, same_cb, custom_txt, compute_btn]),
+            widgets.VBox([
+                start_txt,
+                end_txt,
+                same_cb,
+                elev_weight,
+                custom_txt,
+                compute_btn,
+            ]),
         ]
     )
     display(ui, out)

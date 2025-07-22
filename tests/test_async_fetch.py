@@ -1,7 +1,7 @@
-import aiohttp
 import pytest
 from unittest import mock
 
+pytest.importorskip("aiohttp")
 import async_fetch
 
 
