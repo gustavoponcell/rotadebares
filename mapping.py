@@ -8,10 +8,6 @@ from data_fetch import session
 
 log = logging.getLogger(__name__)
 
-from data_fetch import session
-
-log = logging.getLogger(__name__)
-
 
 def fetch_route_geometry(a: Tuple[float, float], b: Tuple[float, float]) -> List[Tuple[float, float]]:
     """Busca linha de caminho entre dois pontos via OSRM."""
