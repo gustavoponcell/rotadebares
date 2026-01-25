@@ -1,7 +1,7 @@
 import pytest
 from unittest import mock
 
-pytest.importorskip("aiohttp")
+aiohttp = pytest.importorskip("aiohttp")
 import async_fetch
 
 
@@ -27,7 +27,7 @@ async def test_osrm_table_async_success():
     resp = FakeResp({"distances": [[0, 1], [1, 0]]})
 
     class FakeSession:
-        async def get(self, *args, **kwargs):
+        def get(self, *args, **kwargs):
             return resp
 
     with mock.patch("async_fetch.get_session", return_value=FakeSession()):
@@ -44,8 +44,11 @@ async def test_osrm_table_async_fallback():
         raise aiohttp.ClientError("fail")
 
     class FakeSession:
-        async def get(self, url, params=None, timeout=None):
-            return await fake_get(url, params=params, timeout=timeout)
+        def get(self, url, params=None, timeout=None):
+            if params and "sources" in params:
+                idx = params["sources"]
+                return FakeResp({"distances": [[idx * 10, idx * 10 + 1]]})
+            raise aiohttp.ClientError("fail")
 
     with mock.patch("async_fetch.get_session", return_value=FakeSession()):
         result = await async_fetch.osrm_table_async([(0, 0), (1, 1)])

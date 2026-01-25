@@ -84,7 +84,7 @@ launch_ui()
   - Usar endpoint público `router.project-osrm.org`.
   - Tratar exceções e usar fallback por linha quando a tabela falhar.
 - **Fallbacks**:
-  - Se `table` falhar, o código tenta obter linha a linha (paralelo com `ThreadPoolExecutor`) e, se ainda falhar, devolve matriz zerada. (`data_fetch.py::osrm_table()`).
+  - Se `table` falhar, o código tenta obter linha a linha (paralelo com `ThreadPoolExecutor`) e, se ainda falhar, retorna `None` com log de erro (sem matriz zerada). (`data_fetch.py::osrm_table()`).
 
 ## D) Arquitetura e fluxo do pipeline (detalhado)
 
@@ -156,10 +156,11 @@ main.py
   - Índices de início/fim.
 - **Saída**: sequência ordenada de índices visitados (rota). (`solve_tsp`).
 - **Função objetivo**: minimizar o custo total da rota na matriz (distância + penalidade de subida). (`apply_elevation_penalty`).
+- **Escala de custo no OR-Tools**: a matriz é convertida para inteiros com escala e arredondamento (`COST_SCALE = 100`) para preservar granularidade e evitar truncamento. (`optimization.py`).
 - **Heurísticas/estratégias**:
   - `PATH_CHEAPEST_ARC` como primeira solução. (`optimization.py::solve_tsp()` e `solve_tsp_guided_local_search()`).
   - `GUIDED_LOCAL_SEARCH` disponível, mas **não usado pela UI atualmente**. (`optimization.py::solve_tsp_guided_local_search()`).
-  - `christofides_tsp()` disponível como aproximação via NetworkX. (`optimization.py::christofides_tsp()`).
+  - `christofides_tsp()` disponível como aproximação via NetworkX (garante apenas início fixo; não fixa destino). (`optimization.py::christofides_tsp()`).
 - **Complexidade e gargalos**:
   - **OSRM table**: pode ser o maior gargalo (tempo e limites do endpoint público).
   - **OR-Tools**: cresce com o número de pontos; o tempo limite padrão é 5s.
@@ -199,7 +200,7 @@ main.py
 - **Inputs principais**: município, lista de POIs com checkbox, partida/destino, extras e slider de peso de subida. (`ui.py`).
 - **Callbacks**:
   - `on_load_pois()` para buscar e listar POIs.
-  - `on_compute()` para executar pipeline e salvar HTML. (`ui.py`).
+  - `on_compute()` para executar pipeline e salvar HTML (rota encerra no destino real sem append manual). (`ui.py`).
 - **Output**: HTML salvo localmente e link para download com `FileLink`. (`ui.py::on_compute()`).
 
 ## I) Testes e benchmarking
@@ -228,10 +229,10 @@ python benchmark.py
 - **Sem notebook principal versionado**: falta um `.ipynb` oficial para execução no Colab. (TODO).
 - **Uso de `networkx`** em `optimization.py` pode exigir dependência extra não listada em `requirements.txt`. (TODO validar). (`optimization.py`).
 - **Async não integrado**: `async_fetch.py` não é usado pela UI. (TODO integrar/avaliar). (`async_fetch.py`).
+- **Falhas no OSRM Table interrompem o fluxo**: quando o OSRM não retorna matriz válida, o pipeline é abortado e o usuário precisa tentar novamente. (`data_fetch.py`, `ui.py`).
 
 ### Roadmap
 - Integrar `async_fetch.py` ao fluxo principal.
 - Adicionar caching para OSRM Table e POIs por cidade.
 - Criar notebook de entrada e documentar.
 - Evoluir solver (GLS/Christofides) com escolha na UI.
-
