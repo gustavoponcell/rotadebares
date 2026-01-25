@@ -70,6 +70,7 @@ def fetch_overture_places(
             "lat": float(lat),
             "lon": float(lon),
             "source": "overture",
+            "raw_tags": {"category": category, "names": name},
         }
         pois.append(poi)
     log.info("Overture: %s registros retornados na bbox.", len(pois))

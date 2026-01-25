@@ -33,7 +33,7 @@ streamlit run app.py --server.address 0.0.0.0 --server.port 8501
 3) **Acessar a aplicação**
 - No Codespaces, abra a aba **Ports** e clique em **Open in Browser/Preview** na porta **8501**.
 - A UI web permite carregar POIs, escolher extras, ajustar o peso de subida e baixar o HTML final.
-- **Opcional (experimental)**: para habilitar Overture Places, inicie o app com `ENABLE_OVERTURE=true`.
+- **Opcional (experimental)**: Overture Places pode ser ligado no toggle da UI; `ENABLE_OVERTURE=true` continua como override opcional.
 
 ## C) Como rodar no Colab (passo a passo)
 
@@ -66,7 +66,7 @@ pip install -r requirements.txt
 !python main.py
 ```
 
-> **Opcional (experimental)**: para habilitar Overture Places em notebooks/Colab, exporte `ENABLE_OVERTURE=true`
+> **Opcional (experimental)**: para habilitar Overture Places em notebooks/Colab, use o toggle na UI; `ENABLE_OVERTURE=true` segue como override opcional.
 > antes de rodar o script. Em ambientes limitados, mantenha desabilitado.
 
 > **Observação**: o fluxo é pensado para execução dentro de notebook/Colab (UI com `ipywidgets`). Para rodar a UI em notebook, importe e chame `launch_ui()`:
@@ -96,7 +96,7 @@ launch_ui()
 
 ### 2) Overture Places (experimental, opcional)
 - **O que fazemos**: consultamos o dataset público Overture Places via DuckDB + `httpfs` lendo GeoParquet remoto no S3, filtrando por **bbox** para evitar baixar o dataset completo. (`overture_fetch.py::fetch_overture_places()`).
-- **Como habilitar**: defina `ENABLE_OVERTURE=true` e marque o checkbox na UI Streamlit.
+- **Como habilitar**: use o toggle “Incluir Overture Places (experimental)” na UI Streamlit. `ENABLE_OVERTURE=true` ainda pode forçar a fonte adicional.
 - **Normalização**:
   - `poi_id = overture:{id}` e `source='overture'`.
   - `name` usa `names.primary` quando disponível.
@@ -106,8 +106,8 @@ launch_ui()
   - Em caso de falha ou instabilidade, desative a flag e use apenas OSM.
 - **Troubleshooting rápido**:
   - Erros de `httpfs`/`spatial`: confirme que `duckdb` está instalado via `requirements.txt`.
-  - Timeouts/instabilidade no Codespaces: rode com `ENABLE_OVERTURE=false` e utilize apenas OSM.
-- **Fallback**: se `ENABLE_OVERTURE` estiver desligado, o app usa somente OSM/Overpass.
+  - Timeouts/instabilidade no Codespaces: mantenha o toggle desligado para usar apenas OSM.
+- **Fallback**: se Overture falhar (dependências ausentes/consulta), o app usa somente OSM/Overpass.
 
 ### 3) Nominatim/Photon (geocoding via geopy)
 - **O que fazemos**: geocoding do endereço com **rate limit** (`geopy.extra.rate_limiter.RateLimiter`) e cache simples. (`geocoding.py`).
@@ -253,8 +253,10 @@ app.py
 
 ### Streamlit (UI web)
 - **Inputs principais**: município, seleção de POIs, partida/destino, extras e peso de subida. (`app.py`).
-- **Fonte opcional**: checkbox **“Incluir Overture Places (experimental)”** aparece apenas com `ENABLE_OVERTURE=true`. (`app.py`).
-- **Proteção de escala**: se o total combinado de POIs exceder o limite (padrão 300), o app corta a lista pelos pontos mais próximos do centro da bbox para evitar explosão na chamada OSRM Table. (`core.py::load_pois()`).
+- **Fonte opcional**: toggle **“Incluir Overture Places (experimental)”** sempre aparece na UI e tem fallback automático. Se o DuckDB/HTTPFS/Spatial falhar, a UI mostra um aviso e segue apenas com OSM. `ENABLE_OVERTURE=true` pode forçar a fonte adicional, mas não é obrigatório. (`app.py`, `core.py`, `overture_fetch.py`).
+- **Prévia automática**: ao selecionar município e tags, o app busca POIs (OSM e opcionalmente Overture) e exibe total, contagem por categoria, matches por texto e tabela detalhada antes de calcular rota. (`app.py`, `core.py`).
+- **Filtros por AMENITY_TAGS**: tags OSM entram no Overpass como filtro `amenity=*`; tags PT-BR fazem filtro textual em `name`, `brand`, `operator`, `description`, `cuisine` e tags cruas. (`app.py`, `core.py`, `data_fetch.py`).
+- **Proteção de escala**: se o total de POIs filtrados exceder o limite (padrão 300), o app corta a lista pelos pontos mais próximos do centro da bbox (ou do start quando já geocodificado) para evitar explosão na chamada OSRM Table. (`app.py`, `core.py`).
 - **Output**: mapa renderizado via `st.components.v1.html` e download do HTML via `st.download_button`. (`app.py`).
 
 ### ipywidgets (UI no Colab)
