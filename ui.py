@@ -132,18 +132,22 @@ def on_compute(_: widgets.Button) -> None:
 
     log.info("⏳ Calculando matriz…")
     dist = osrm_table([(lat, lon) for lat, lon, _ in coords])
+    if dist is None:
+        log.error("❌ Falha ao obter matriz OSRM. Verifique a conexão ou tente novamente.")
+        return
     weight = float(elev_weight.value)
     penal = apply_elevation_penalty(dist, coords, weight)
 
     end_idx = len(coords) - 1
-    best = min(range(1, end_idx), key=lambda i: penal[i][end_idx])
 
     log.info("🚦 Resolvendo TSP…")
-    route = solve_tsp(penal, 0, best)
+    route = solve_tsp(penal, 0, end_idx)
     if not route:
         log.error("❌ TSP falhou")
         return
-    route.append(end_idx)
+    if route[0] != 0 or route[-1] != end_idx or len(route) != len(set(route)):
+        log.error("❌ Rota inválida: verifique origem/destino ou matriz.")
+        return
 
     log.info("🗺️ Gerando mapa…")
     m = build_map(route, coords, names)

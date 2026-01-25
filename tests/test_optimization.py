@@ -30,30 +30,35 @@ DIST = [
     [6, 3, 12, 0],
 ]
 
-
-def _check_route(route):
+def _check_route_start_end(route):
     assert route[0] == 0
     assert route[-1] == 3
-    assert set(route) == {0,1,2,3}
+    assert set(route) == {0, 1, 2, 3}
+    assert len(route) == 4
+
+
+def _check_route_start_only(route):
+    assert route[0] == 0
+    assert set(route) == {0, 1, 2, 3}
     assert len(route) == 4
 
 
 @pytest.mark.skipif(not ORTOOLS_AVAILABLE, reason="ortools ausente")
 def test_solve_tsp():
     r = opt.solve_tsp(DIST, 0, 3)
-    _check_route(r)
+    _check_route_start_end(r)
 
 
 @pytest.mark.skipif(not ORTOOLS_AVAILABLE, reason="ortools ausente")
 def test_solve_tsp_gls():
     r = opt.solve_tsp_guided_local_search(DIST, 0, 3)
-    _check_route(r)
+    _check_route_start_end(r)
 
 
 @pytest.mark.skipif(not ORTOOLS_AVAILABLE, reason="ortools ausente")
 def test_christofides_tsp():
     r = opt.christofides_tsp(DIST, 0, 3)
-    _check_route(r)
+    _check_route_start_only(r)
 
 
 def test_apply_elevation_penalty_changes_best():
@@ -65,3 +70,10 @@ def test_apply_elevation_penalty_changes_best():
     penal = opt.apply_elevation_penalty(base, coords, weight=1)
     penal_best = min(range(1, 3), key=lambda i: penal[i][3])
     assert plain_best != penal_best
+
+
+def test_apply_elevation_penalty_returns_copy_when_zero_weight():
+    base = [[0, 1], [1, 0]]
+    penal = opt.apply_elevation_penalty(base, [(0, 0, 0), (0, 0, 0)], weight=0)
+    assert penal == base
+    assert penal is not base

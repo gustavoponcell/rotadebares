@@ -1,8 +1,30 @@
+import logging
 from typing import List, Tuple
 
 import networkx as nx
 
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+
+log = logging.getLogger(__name__)
+COST_SCALE = 100
+
+
+def _validate_dist_matrix(dist_matrix: List[List[float]], start: int, end: int) -> bool:
+    if not dist_matrix:
+        log.error("Matriz de distâncias vazia.")
+        return False
+    n = len(dist_matrix)
+    if any(len(row) != n for row in dist_matrix):
+        log.error("Matriz de distâncias inválida (não quadrada).")
+        return False
+    if not (0 <= start < n) or not (0 <= end < n):
+        log.error(f"Índices fora do range: start={start}, end={end}, n={n}.")
+        return False
+    return True
+
+
+def _scaled_cost(dist: float) -> int:
+    return int(round(dist * COST_SCALE))
 
 
 def solve_tsp(dist_matrix: List[List[float]], start: int, end: int, time_limit_s: int = 5) -> List[int] | None:
@@ -24,12 +46,15 @@ def solve_tsp(dist_matrix: List[List[float]], start: int, end: int, time_limit_s
     list[int] | None
         Ordem dos índices a serem visitados ou ``None`` em caso de falha.
     """
+    if not _validate_dist_matrix(dist_matrix, start, end):
+        return None
+
     n = len(dist_matrix)
     mgr = pywrapcp.RoutingIndexManager(n, 1, [start], [end])
     routing = pywrapcp.RoutingModel(mgr)
 
-    def cb(i, j):
-        return int(dist_matrix[mgr.IndexToNode(i)][mgr.IndexToNode(j)])
+    def cb(i: int, j: int) -> int:
+        return _scaled_cost(dist_matrix[mgr.IndexToNode(i)][mgr.IndexToNode(j)])
 
     idx = routing.RegisterTransitCallback(cb)
     routing.SetArcCostEvaluatorOfAllVehicles(idx)
@@ -64,12 +89,12 @@ def apply_elevation_penalty(
     valor original da matriz.
     """
 
-    if weight <= 0:
-        return dist_matrix
-
     n = len(dist_matrix)
-    alts = [c[2] for c in coords]
     penal = [row[:] for row in dist_matrix]
+    if weight <= 0:
+        return penal
+
+    alts = [c[2] for c in coords]
     for i in range(n):
         for j in range(n):
             if i == j:
@@ -102,12 +127,15 @@ def solve_tsp_guided_local_search(
         Ordem dos índices a serem visitados ou ``None`` em caso de falha.
     """
 
+    if not _validate_dist_matrix(dist_matrix, start, end):
+        return None
+
     n = len(dist_matrix)
     mgr = pywrapcp.RoutingIndexManager(n, 1, [start], [end])
     routing = pywrapcp.RoutingModel(mgr)
 
     def cb(i: int, j: int) -> int:
-        return int(dist_matrix[mgr.IndexToNode(i)][mgr.IndexToNode(j)])
+        return _scaled_cost(dist_matrix[mgr.IndexToNode(i)][mgr.IndexToNode(j)])
 
     idx = routing.RegisterTransitCallback(cb)
     routing.SetArcCostEvaluatorOfAllVehicles(idx)
@@ -133,8 +161,8 @@ def solve_tsp_guided_local_search(
 def christofides_tsp(dist_matrix: List[List[float]], start: int, end: int) -> List[int]:
     """Aproxima o TSP via algoritmo de Christofides da NetworkX.
 
-    Esta função ignora ``time_limit_s`` e sempre retorna um ciclo começando em
-    ``start``. O ``end`` é reposicionado para o final da lista.
+    Esta função sempre retorna um ciclo começando em ``start``. O ``end`` é
+    apenas aceito para compatibilidade de assinatura e não é fixado no final.
 
     Parameters
     ----------
@@ -165,12 +193,6 @@ def christofides_tsp(dist_matrix: List[List[float]], start: int, end: int) -> Li
     if start in cycle:
         while cycle[0] != start:
             cycle.append(cycle.pop(0))
-    if end in cycle:
-        while cycle[-1] != end:
-            cycle.append(cycle.pop(0))
-    else:
-        cycle.append(end)
-
     return cycle
 
 

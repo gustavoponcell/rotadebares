@@ -28,6 +28,20 @@ def test_osrm_table_fallback():
         result = data_fetch.osrm_table([(0,0), (1,1)])
         assert result == [[0,1],[10,11]]
 
+def test_osrm_table_empty_input():
+    with mock.patch('data_fetch.session.get') as mocked_get:
+        result = data_fetch.osrm_table([])
+        assert result is None
+        mocked_get.assert_not_called()
+
+
+def test_osrm_table_failure_returns_none():
+    def side_effect(url, params=None, timeout=None):
+        raise requests.RequestException('fail')
+    with mock.patch('data_fetch.session.get', side_effect=side_effect):
+        result = data_fetch.osrm_table([(0,0), (1,1)])
+        assert result is None
+
 
 def test_coletar_pois_bbox_filtering():
     elements = [

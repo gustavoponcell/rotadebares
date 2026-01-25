@@ -34,9 +34,11 @@ def test_geocode_fallback_photon():
     fake = FakeLoc(3.0, 4.0)
     with mock.patch('geocoding.geocode_rl', return_value=None):
         with mock.patch('geocoding.photon_geocode_rl', return_value=fake):
-            geocoding._cache_geo.clear()
-            result = geocoding.geocode_fallback_single('addr', 'city')
-            assert result == (3.0, 4.0)
+            with mock.patch('geocoding.get_city_bbox', return_value=None):
+                with mock.patch('geocoding.get_city_polygon', return_value=None):
+                    geocoding._cache_geo.clear()
+                    result = geocoding.geocode_fallback_single('addr', 'city')
+                    assert result == (3.0, 4.0)
 
 
 def test_geocode_city_mismatch():

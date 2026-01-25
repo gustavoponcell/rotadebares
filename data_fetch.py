@@ -126,8 +126,11 @@ def batch_altitude(latlons: List[Tuple[float, float]]) -> List[float]:
     return [0] * len(locs)
 
 
-def osrm_table(latlons: List[Tuple[float, float]], timeout: int = 30) -> List[List[float]]:
+def osrm_table(latlons: List[Tuple[float, float]], timeout: int = 30) -> List[List[float]] | None:
     """Retorna matriz de distâncias usando OSRM."""
+    if not latlons:
+        log.error("OSRM Table chamado com lista vazia.")
+        return None
     coord_str = ";".join(f"{lon},{lat}" for lat, lon in latlons)
     url = f"http://router.project-osrm.org/table/v1/foot/{coord_str}"
     params = {"annotations": "distance"}
@@ -153,11 +156,12 @@ def osrm_table(latlons: List[Tuple[float, float]], timeout: int = 30) -> List[Li
             for fut in as_completed(futures):
                 idx, row = fut.result()
                 if row is None:
-                    return [[0] * len(latlons) for _ in latlons]
+                    log.error("Falha ao recuperar tabela OSRM linha a linha.")
+                    return None
                 results[idx] = row
         return results
     except Exception as e:
         log.error(f"Erro ao processar resposta OSRM: {e}")
-        return [[0] * len(latlons) for _ in latlons]
+        return None
 
 __all__ = ["coletar_pois", "batch_altitude", "osrm_table", "session"]
