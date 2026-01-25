@@ -73,6 +73,22 @@ Este documento define as diretrizes para um agente de IA atuar sobre o repositó
    * Medir tempo de execução antes e depois das otimizações.
    * Validar acurácia das rotas e qualidade dos resultados.
 
+## Documentação viva (docs/DOCUMENTACAO.md)
+
+Sempre que uma alteração modificar o comportamento do projeto, atualize a documentação em
+`docs/DOCUMENTACAO.md`. Esta atualização é **obrigatória** para PRs que mudam fluxo, serviços,
+algoritmos ou interface.
+
+Checklist obrigatório:
+
+* [ ] Atualizou `docs/DOCUMENTACAO.md` na seção correspondente?
+* [ ] Mudou API/endpoint/limite? Atualizou seção **“Serviços externos”**.
+* [ ] Mudou algoritmo/parametrização OR-Tools? Atualizou **“Algoritmo de roteirização”**.
+* [ ] Mudou UI? Atualizou **“Mapas e UI”**.
+* [ ] Mudou setup/deps? Atualizou **“Como rodar no Colab”**.
+
+Regra: **PRs que alteram comportamento devem atualizar a documentação**.
+
 ## Checkpoints e Entregáveis
 
 * [ ] Configuração e execução no Colab sem erros.
