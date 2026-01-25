@@ -23,6 +23,7 @@ O projeto oferece uma **roteirização interativa** de bares e restaurantes com 
 ```bash
 pip install -r requirements.txt
 ```
+> `duckdb` é necessário apenas para Overture (experimental) e já está no `requirements.txt`.
 
 2) **Executar o Streamlit (porta 8501)**
 ```bash
@@ -32,6 +33,7 @@ streamlit run app.py --server.address 0.0.0.0 --server.port 8501
 3) **Acessar a aplicação**
 - No Codespaces, abra a aba **Ports** e clique em **Open in Browser/Preview** na porta **8501**.
 - A UI web permite carregar POIs, escolher extras, ajustar o peso de subida e baixar o HTML final.
+- **Opcional (experimental)**: para habilitar Overture Places, inicie o app com `ENABLE_OVERTURE=true`.
 
 ## C) Como rodar no Colab (passo a passo)
 
@@ -64,6 +66,9 @@ pip install -r requirements.txt
 !python main.py
 ```
 
+> **Opcional (experimental)**: para habilitar Overture Places em notebooks/Colab, exporte `ENABLE_OVERTURE=true`
+> antes de rodar o script. Em ambientes limitados, mantenha desabilitado.
+
 > **Observação**: o fluxo é pensado para execução dentro de notebook/Colab (UI com `ipywidgets`). Para rodar a UI em notebook, importe e chame `launch_ui()`:
 ```python
 from ui import launch_ui
@@ -89,7 +94,22 @@ launch_ui()
   - Se `area_id` não existir, usa `bbox` (tiling).
   - Se ambos falharem, tenta `area` com nome. (`data_fetch.py::coletar_pois()`).
 
-### 2) Nominatim/Photon (geocoding via geopy)
+### 2) Overture Places (experimental, opcional)
+- **O que fazemos**: consultamos o dataset público Overture Places via DuckDB + `httpfs` lendo GeoParquet remoto no S3, filtrando por **bbox** para evitar baixar o dataset completo. (`overture_fetch.py::fetch_overture_places()`).
+- **Como habilitar**: defina `ENABLE_OVERTURE=true` e marque o checkbox na UI Streamlit.
+- **Normalização**:
+  - `poi_id = overture:{id}` e `source='overture'`.
+  - `name` usa `names.primary` quando disponível.
+  - `category` usa `categories.primary` (mantemos `category_raw` para inspeção).
+- **Limitações/performance**:
+  - É uma fonte **experimental** e pode ser mais lenta/instável em Codespaces.
+  - Em caso de falha ou instabilidade, desative a flag e use apenas OSM.
+- **Troubleshooting rápido**:
+  - Erros de `httpfs`/`spatial`: confirme que `duckdb` está instalado via `requirements.txt`.
+  - Timeouts/instabilidade no Codespaces: rode com `ENABLE_OVERTURE=false` e utilize apenas OSM.
+- **Fallback**: se `ENABLE_OVERTURE` estiver desligado, o app usa somente OSM/Overpass.
+
+### 3) Nominatim/Photon (geocoding via geopy)
 - **O que fazemos**: geocoding do endereço com **rate limit** (`geopy.extra.rate_limiter.RateLimiter`) e cache simples. (`geocoding.py`).
 - **Limites/boas práticas**:
   - `RateLimiter` com `min_delay_seconds=1` para Nominatim e Photon. (`geocoding.py::geocode_rl`, `photon_geocode_rl`).
@@ -97,14 +117,14 @@ launch_ui()
 - **Fallbacks**:
   - `geocode_strict_single()` tenta Nominatim com restrições; se falhar, `geocode_fallback_single()` tenta Nominatim “menos restrito” e depois Photon. (`geocoding.py`).
 
-### 3) Open-Elevation (altitudes)
+### 4) Open-Elevation (altitudes)
 - **O que fazemos**: busca altitudes em lote para cada ponto. (`data_fetch.py::batch_altitude()`).
 - **Limites/boas práticas**:
   - Chamadas em lote (`/api/v1/lookup`) para reduzir requisições.
   - Tratar falhas retornando altitude 0. (`data_fetch.py::batch_altitude()`).
 - **Fallbacks**: se a API falhar, retorna 0 para todas as altitudes.
 
-### 4) OSRM público (distâncias e rotas)
+### 5) OSRM público (distâncias e rotas)
 - **O que fazemos**:
   - `table`: matriz de distâncias para o TSP. (`data_fetch.py::osrm_table()`).
   - `route`: geometria da rota para desenhar o mapa. (`mapping.py::fetch_route_geometry_multi()`).
@@ -233,6 +253,8 @@ app.py
 
 ### Streamlit (UI web)
 - **Inputs principais**: município, seleção de POIs, partida/destino, extras e peso de subida. (`app.py`).
+- **Fonte opcional**: checkbox **“Incluir Overture Places (experimental)”** aparece apenas com `ENABLE_OVERTURE=true`. (`app.py`).
+- **Proteção de escala**: se o total combinado de POIs exceder o limite (padrão 300), o app corta a lista pelos pontos mais próximos do centro da bbox para evitar explosão na chamada OSRM Table. (`core.py::load_pois()`).
 - **Output**: mapa renderizado via `st.components.v1.html` e download do HTML via `st.download_button`. (`app.py`).
 
 ### ipywidgets (UI no Colab)

@@ -11,3 +11,4 @@ networkx
 pytest-asyncio
 shapely
 streamlit
+duckdb

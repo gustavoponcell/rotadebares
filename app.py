@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 import streamlit as st
 
 from core import RouteResult, compute_route_and_map, load_pois
+from overture_fetch import is_overture_enabled
 
 
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,16 @@ col_left, col_right = st.columns(2)
 
 with col_left:
     city = st.text_input("Município", value="Diamantina")
+    overture_flag_enabled = is_overture_enabled()
+    if overture_flag_enabled:
+        include_overture = st.checkbox("Incluir Overture Places (experimental)", value=False)
+    else:
+        include_overture = st.checkbox(
+            "Incluir Overture Places (experimental)",
+            value=False,
+            disabled=True,
+        )
+        st.caption("Ative com ENABLE_OVERTURE=true para habilitar a fonte extra.")
     load_pois_clicked = st.button("Carregar POIs")
 
     if load_pois_clicked:
@@ -30,12 +41,25 @@ with col_left:
             st.error("Informe um município antes de buscar POIs.")
         else:
             st.info(f"Buscando POIs em {city}...")
-            result = load_pois(city)
+            result = load_pois(city, include_overture=include_overture, combined_limit=300)
             st.session_state.pois = result.pois
             st.session_state.pois_report = result.report
             st.success(f"{len(st.session_state.pois)} POIs carregados.")
             if result.report.tiles_failed:
                 st.warning(f"{result.report.tiles_failed} tiles falharam na busca Overpass.")
+            if result.report.overture_enabled:
+                st.info(
+                    f"Contagens: OSM={result.report.osm_total} | "
+                    f"Overture={result.report.overture_total} | "
+                    f"Total={result.report.combined_total}"
+                )
+                if result.report.overture_error:
+                    st.warning(f"Overture falhou: {result.report.overture_error}. Usando apenas OSM.")
+            if result.report.trimmed_total:
+                st.warning(
+                    "Limite de POIs aplicado (%s). %s pontos ficaram fora para evitar excesso no OSRM."
+                    % (len(st.session_state.pois), result.report.trimmed_total)
+                )
             if len(result.pois) > 500:
                 st.warning("Muitos POIs encontrados (>500). Considere filtrar ou reduzir a área.")
 
