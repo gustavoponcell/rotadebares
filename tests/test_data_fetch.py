@@ -7,6 +7,7 @@ data_fetch = pytest.importorskip("data_fetch")
 class FakeResp:
     def __init__(self, data):
         self._data = data
+        self.status_code = 200
     def raise_for_status(self):
         pass
     def json(self):
@@ -54,9 +55,10 @@ def test_coletar_pois_bbox_filtering():
     with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
          mock.patch("data_fetch.get_city_area_id", return_value=None), \
          mock.patch("data_fetch.get_city_polygon", return_value=None), \
+         mock.patch("data_fetch.tile_bbox", return_value=[(0, 0, 2, 2)]), \
          mock.patch("data_fetch.session.post", return_value=resp):
-        pois = data_fetch.coletar_pois("cidade")
-        assert pois == [
+        result = data_fetch.coletar_pois("cidade")
+        assert result.pois == [
             {
                 "poi_id": "osm:node:1",
                 "osm_type": "node",
@@ -79,9 +81,10 @@ def test_coletar_pois_dedup_inside():
     with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
          mock.patch("data_fetch.get_city_area_id", return_value=None), \
          mock.patch("data_fetch.get_city_polygon", return_value=None), \
+         mock.patch("data_fetch.tile_bbox", return_value=[(0, 0, 2, 2)]), \
          mock.patch("data_fetch.session.post", return_value=resp):
-        pois = data_fetch.coletar_pois("cidade")
-        assert pois == [
+        result = data_fetch.coletar_pois("cidade")
+        assert result.pois == [
             {
                 "poi_id": "osm:node:10",
                 "osm_type": "node",
@@ -116,9 +119,10 @@ def test_coletar_pois_addr_city():
     with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
          mock.patch("data_fetch.get_city_area_id", return_value=None), \
          mock.patch("data_fetch.get_city_polygon", return_value=None), \
+         mock.patch("data_fetch.tile_bbox", return_value=[(0, 0, 2, 2)]), \
          mock.patch("data_fetch.session.post", return_value=resp):
-        pois = data_fetch.coletar_pois("cidade")
-        assert pois == [
+        result = data_fetch.coletar_pois("cidade")
+        assert result.pois == [
             {
                 "poi_id": "osm:node:21",
                 "osm_type": "node",
@@ -148,13 +152,62 @@ def test_coletar_pois_polygon():
          mock.patch("data_fetch.get_city_area_id", return_value=1), \
          mock.patch("data_fetch.get_city_polygon", return_value=DummyPoly()), \
          mock.patch("data_fetch.session.post", return_value=resp):
-        pois = data_fetch.coletar_pois("cidade")
-        assert pois == [
+        result = data_fetch.coletar_pois("cidade")
+        assert result.pois == [
             {
                 "poi_id": "osm:node:31",
                 "osm_type": "node",
                 "osm_id": 31,
                 "name": "Bar1",
+                "amenity": None,
+                "lat": 1.0,
+                "lon": 1.0,
+            }
+        ]
+
+
+def test_coletar_pois_dedup_across_tiles():
+    elements_tile_1 = [
+        {"type": "node", "id": 1, "tags": {"name": "Bar1"}, "lat": 1, "lon": 1},
+        {"type": "node", "id": 2, "tags": {"name": "Bar2"}, "lat": 1.5, "lon": 1.5},
+    ]
+    elements_tile_2 = [
+        {"type": "node", "id": 1, "tags": {"name": "Bar1"}, "lat": 1.1, "lon": 1.1},
+        {"type": "node", "id": 3, "tags": {"name": "Bar3"}, "lat": 1.6, "lon": 1.6},
+    ]
+    resp_1 = FakeResp({"elements": elements_tile_1})
+    resp_2 = FakeResp({"elements": elements_tile_2})
+    bbox = (0, 2, 0, 2)
+    with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
+         mock.patch("data_fetch.get_city_area_id", return_value=None), \
+         mock.patch("data_fetch.get_city_polygon", return_value=None), \
+         mock.patch("data_fetch.tile_bbox", return_value=[(0, 0, 1, 1), (1, 1, 2, 2)]), \
+         mock.patch("data_fetch.session.post", side_effect=[resp_1, resp_2]):
+        result = data_fetch.coletar_pois("cidade")
+        assert len(result.pois) == 3
+        assert result.report.tiles_total == 2
+        assert result.report.tiles_failed == 0
+
+
+def test_coletar_pois_anti_vazamento_bbox():
+    elements = [
+        {"type": "node", "id": 1, "tags": {"name": "Dentro"}, "lat": 1, "lon": 1},
+        {"type": "node", "id": 2, "tags": {"name": "Fora"}, "lat": 3, "lon": 3},
+    ]
+    resp = FakeResp({"elements": elements})
+    bbox = (0, 2, 0, 2)
+    with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
+         mock.patch("data_fetch.get_city_area_id", return_value=None), \
+         mock.patch("data_fetch.get_city_polygon", return_value=None), \
+         mock.patch("data_fetch.tile_bbox", return_value=[(-0.1, -0.1, 2.1, 2.1)]), \
+         mock.patch("data_fetch.session.post", return_value=resp):
+        result = data_fetch.coletar_pois("cidade")
+        assert result.pois == [
+            {
+                "poi_id": "osm:node:1",
+                "osm_type": "node",
+                "osm_id": 1,
+                "name": "Dentro",
                 "amenity": None,
                 "lat": 1.0,
                 "lon": 1.0,

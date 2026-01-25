@@ -62,7 +62,8 @@ def on_load_pois(_: widgets.Button) -> None:
     with out:
         clear_output()
     log.info(f"🔍 Buscando POIs em {city_widget.value}…")
-    pois = load_pois(city_widget.value.strip())
+    result = load_pois(city_widget.value.strip())
+    pois = result.pois
     pois_checkboxes.clear()
     pois_data.clear()
     items = []
@@ -74,6 +75,10 @@ def on_load_pois(_: widgets.Button) -> None:
         items.append(cb)
     pois_box.children = items
     log.info(f"✅ {len(pois)} POIs carregados.")
+    if result.report.tiles_failed:
+        log.warning(f"⚠️ {result.report.tiles_failed} tiles falharam na busca Overpass.")
+    if len(pois) > 500:
+        log.warning("⚠️ Muitos POIs encontrados (>500). Considere filtrar ou reduzir a área.")
 
 
 def on_same_change(change: dict) -> None:

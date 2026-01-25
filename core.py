@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from data_fetch import batch_altitude, coletar_pois, osrm_table
+from data_fetch import PoisFetchReport, PoisFetchResult, batch_altitude, coletar_pois, osrm_table
 from geocoding import geocode_fallback_single, geocode_strict_single
 from mapping import build_map
 from optimization import apply_elevation_penalty, solve_tsp
@@ -16,12 +16,12 @@ class RouteResult:
     map_html: str
 
 
-def load_pois(city: str) -> List[dict]:
+def load_pois(city: str) -> PoisFetchResult:
     """Carrega POIs para um município usando o Overpass."""
 
     city = city.strip()
     if not city:
-        return []
+        return PoisFetchResult(pois=[], report=PoisFetchReport(tiles_total=0, tiles_failed=0))
     return coletar_pois(city)
 
 
@@ -122,4 +122,4 @@ def compute_route_and_map(
     return RouteResult(route=route, map_html=html)
 
 
-__all__ = ["RouteResult", "load_pois", "compute_route_and_map"]
+__all__ = ["RouteResult", "PoisFetchResult", "load_pois", "compute_route_and_map"]

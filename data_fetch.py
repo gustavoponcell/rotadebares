@@ -1,6 +1,9 @@
 import logging
+import math
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -28,17 +31,93 @@ AMENITY_TAGS = [
 
 # Sessao HTTP com retries
 session = requests.Session()
-retries = Retry(total=5, backoff_factor=1, status_forcelist=[502,504,522,524], allowed_methods=["GET","POST"])
+retries = Retry(total=5, backoff_factor=1, status_forcelist=[502, 504, 522, 524], allowed_methods=["GET", "POST"])
 adapter = HTTPAdapter(max_retries=retries)
 session.mount("http://", adapter)
 session.mount("https://", adapter)
 
+OVERPASS_TIMEOUT = 60
 
-def _build_overpass_query(cidade: str, area_id: int | None, bbox: Tuple[float, float, float, float] | None) -> str:
+
+@dataclass
+class PoisFetchReport:
+    tiles_total: int
+    tiles_failed: int
+
+
+@dataclass
+class PoisFetchResult:
+    pois: List[dict]
+    report: PoisFetchReport
+
+
+def tile_bbox(
+    bbox: Tuple[float, float, float, float],
+    max_tiles_total: int = 16,
+    overlap_m: int = 200,
+) -> List[Tuple[float, float, float, float]]:
+    """Divide uma bbox em tiles com overlap.
+
+    Parameters
+    ----------
+    bbox:
+        (min_lon, min_lat, max_lon, max_lat).
+    max_tiles_total:
+        Limite máximo de tiles (1, 4, 9, 16).
+    overlap_m:
+        Overlap em metros aplicado a cada tile.
+    """
+
+    min_lon, min_lat, max_lon, max_lat = bbox
+    lat_span = max_lat - min_lat
+    lon_span = max_lon - min_lon
+    if lat_span <= 0 or lon_span <= 0:
+        return [bbox]
+
+    mid_lat = (min_lat + max_lat) / 2.0
+    cos_lat = max(math.cos(math.radians(mid_lat)), 1e-6)
+    lat_span_km = lat_span * 111.0
+    lon_span_km = lon_span * 111.0 * cos_lat
+    max_span_km = max(lat_span_km, lon_span_km)
+
+    if max_span_km <= 5:
+        grid = 1
+    elif max_span_km <= 15:
+        grid = 2
+    elif max_span_km <= 30:
+        grid = 3
+    else:
+        grid = 4
+
+    while grid * grid > max_tiles_total and grid > 1:
+        grid -= 1
+
+    overlap_deg_lat = overlap_m / 111_000
+    overlap_deg_lon = overlap_m / (111_000 * cos_lat)
+    lat_step = lat_span / grid
+    lon_step = lon_span / grid
+
+    tiles: List[Tuple[float, float, float, float]] = []
+    for i in range(grid):
+        tile_min_lat = min_lat + i * lat_step - overlap_deg_lat
+        tile_max_lat = min_lat + (i + 1) * lat_step + overlap_deg_lat
+        for j in range(grid):
+            tile_min_lon = min_lon + j * lon_step - overlap_deg_lon
+            tile_max_lon = min_lon + (j + 1) * lon_step + overlap_deg_lon
+            tiles.append((tile_min_lon, tile_min_lat, tile_max_lon, tile_max_lat))
+    return tiles
+
+
+def _build_overpass_query(
+    cidade: str,
+    area_id: int | None,
+    bbox: Tuple[float, float, float, float] | None,
+    timeout: int = OVERPASS_TIMEOUT,
+) -> str:
     amenity_filter = "|".join(AMENITY_TAGS)
     if area_id:
         return f"""
-        [out:json][timeout:60];
+        [out:json][timeout:{timeout}];
         area({area_id})->.a;
         (
           node[\"amenity\"~\"^({amenity_filter})$\"](area.a);
@@ -50,7 +129,7 @@ def _build_overpass_query(cidade: str, area_id: int | None, bbox: Tuple[float, f
     if bbox:
         s, n, w, e = bbox
         return f"""
-        [out:json][timeout:60];
+        [out:json][timeout:{timeout}];
         (
           node[\"amenity\"~\"^({amenity_filter})$\"]({s},{w},{n},{e});
           way[\"amenity\"~\"^({amenity_filter})$\"]({s},{w},{n},{e});
@@ -59,7 +138,7 @@ def _build_overpass_query(cidade: str, area_id: int | None, bbox: Tuple[float, f
         out center tags;
         """
     return f"""
-    [out:json][timeout:60];
+    [out:json][timeout:{timeout}];
     area[\"name\"=\"{cidade}\"][boundary=\"administrative\"][admin_level=\"8\"]->.a;
     (
       node[\"amenity\"~\"^({amenity_filter})$\"](area.a);
@@ -103,42 +182,90 @@ def _normalize_poi(el: dict) -> dict | None:
     return poi
 
 
-def coletar_pois(cidade: str) -> List[dict]:
+def _fetch_overpass_elements(
+    query: str,
+    max_retries: int,
+    backoff_factor: float,
+    timeout: int,
+) -> List[dict] | None:
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = session.post("http://overpass-api.de/api/interpreter", data={"data": query}, timeout=timeout)
+            status = resp.status_code
+            if status == 429 or status >= 500:
+                raise requests.HTTPError(f"Overpass status {status}", response=resp)
+            resp.raise_for_status()
+            return resp.json().get("elements", [])
+        except (requests.RequestException, ValueError) as exc:
+            if attempt == max_retries:
+                log.warning("Overpass falhou após %s tentativas: %s", max_retries, exc)
+                break
+            sleep_s = backoff_factor * (2 ** (attempt - 1))
+            log.warning("Overpass falhou (tentativa %s/%s). Retentando em %.1fs...", attempt, max_retries, sleep_s)
+            time.sleep(sleep_s)
+    return None
+
+
+def coletar_pois(
+    cidade: str,
+    max_tiles_total: int = 16,
+    overlap_m: int = 200,
+    max_workers: int = 4,
+    max_retries: int = 3,
+    backoff_factor: float = 1.0,
+    overpass_timeout: int = OVERPASS_TIMEOUT,
+) -> PoisFetchResult:
     """Busca bares e restaurantes via Overpass."""
     bbox = get_city_bbox(cidade)
     area_id = get_city_area_id(cidade)
     poly = get_city_polygon(cidade)
-    q = _build_overpass_query(cidade, area_id, bbox)
-    try:
-        resp = session.post("http://overpass-api.de/api/interpreter", data={"data": q}, timeout=60)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        log.error(f"Erro Overpass: {e}")
-        return []
+    use_bbox_tiles = bbox is not None
+    if use_bbox_tiles:
+        bbox_tiles = tile_bbox((bbox[2], bbox[0], bbox[3], bbox[1]), max_tiles_total, overlap_m)
+    else:
+        bbox_tiles = [None]
 
-    try:
-        elements = resp.json().get("elements", [])
-    except Exception as e:
-        log.error(f"Erro ao decodificar resposta Overpass: {e}")
-        return []
+    def fetch_tile(tile: Tuple[float, float, float, float] | None) -> Tuple[Tuple[float, float, float, float] | None, List[dict] | None]:
+        if tile:
+            tile_bbox_overpass = (tile[1], tile[3], tile[0], tile[2])
+            query = _build_overpass_query(cidade, None, tile_bbox_overpass, timeout=overpass_timeout)
+        else:
+            query = _build_overpass_query(cidade, area_id, None, timeout=overpass_timeout)
+        elements = _fetch_overpass_elements(query, max_retries, backoff_factor, overpass_timeout)
+        return tile, elements
 
-    pois_by_id = {}
-    for el in elements:
-        poi = _normalize_poi(el)
-        if not poi:
-            continue
-        tags = el.get("tags", {})
-        city_tag = tags.get("addr:city")
-        if city_tag and city_tag.lower() != cidade.lower():
-            continue
-        if poly and not point_in_polygon(poi["lat"], poi["lon"], poly):
-            continue
-        if bbox and not poly and not dentro_da_cidade(poi["lat"], poi["lon"], bbox):
-            continue
-        poi_id = poi["poi_id"]
-        if poi_id not in pois_by_id:
-            pois_by_id[poi_id] = poi
-    return list(pois_by_id.values())
+    tiles_failed = 0
+    pois_by_id: Dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(bbox_tiles))) as executor:
+        futures = [executor.submit(fetch_tile, tile) for tile in bbox_tiles]
+        for fut in as_completed(futures):
+            tile, elements = fut.result()
+            if elements is None:
+                tiles_failed += 1
+                log.warning("Tile Overpass falhou: %s", tile)
+                continue
+            for el in elements:
+                poi = _normalize_poi(el)
+                if not poi:
+                    continue
+                tags = el.get("tags", {})
+                city_tag = tags.get("addr:city")
+                if city_tag and city_tag.lower() != cidade.lower():
+                    continue
+                if poly and not point_in_polygon(poi["lat"], poi["lon"], poly):
+                    continue
+                poi_id = poi["poi_id"]
+                if poi_id not in pois_by_id:
+                    pois_by_id[poi_id] = poi
+
+    pois = list(pois_by_id.values())
+    if bbox:
+        pois = [poi for poi in pois if dentro_da_cidade(poi["lat"], poi["lon"], bbox)]
+
+    report = PoisFetchReport(tiles_total=len(bbox_tiles), tiles_failed=tiles_failed)
+    if tiles_failed:
+        log.warning("Overpass retornou dados parciais: %s tiles falharam.", tiles_failed)
+    return PoisFetchResult(pois=pois, report=report)
 
 
 def batch_altitude(latlons: List[Tuple[float, float]]) -> List[float]:
@@ -194,4 +321,12 @@ def osrm_table(latlons: List[Tuple[float, float]], timeout: int = 30) -> List[Li
         log.error(f"Erro ao processar resposta OSRM: {e}")
         return None
 
-__all__ = ["coletar_pois", "batch_altitude", "osrm_table", "session"]
+__all__ = [
+    "PoisFetchReport",
+    "PoisFetchResult",
+    "tile_bbox",
+    "coletar_pois",
+    "batch_altitude",
+    "osrm_table",
+    "session",
+]
