@@ -45,35 +45,9 @@ def test_osrm_table_failure_returns_none():
 
 def test_coletar_pois_bbox_filtering():
     elements = [
-        {"tags": {"name": "Bar1"}, "lat": 1, "lon": 1},  # inside
-        {"tags": {"name": "Bar1"}, "lat": 5, "lon": 5},  # outside dup
-        {"tags": {"name": "Bar2"}, "lat": 5, "lon": 5},  # outside only
-    ]
-    resp = FakeResp({"elements": elements})
-    bbox = (0, 2, 0, 2)
-    with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
-         mock.patch("data_fetch.session.post", return_value=resp):
-        pois = data_fetch.coletar_pois("cidade")
-        assert pois == [{"name": "Bar1", "lat": 1.0, "lon": 1.0}]
-
-
-def test_coletar_pois_dedup_inside():
-    elements = [
-        {"tags": {"name": "Bar1"}, "lat": 1, "lon": 1},
-        {"tags": {"name": "Bar1"}, "lat": 1.1, "lon": 1.1},
-    ]
-    resp = FakeResp({"elements": elements})
-    bbox = (0, 2, 0, 2)
-    with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
-         mock.patch("data_fetch.session.post", return_value=resp):
-        pois = data_fetch.coletar_pois("cidade")
-        assert pois == [{"name": "Bar1", "lat": 1.0, "lon": 1.0}]
-
-
-def test_coletar_pois_addr_city():
-    elements = [
-        {"tags": {"name": "Bar1", "addr:city": "cidade"}, "lat": 1, "lon": 1},
-        {"tags": {"name": "Bar2", "addr:city": "Outra"}, "lat": 1.5, "lon": 1.5},
+        {"type": "node", "id": 1, "tags": {"name": "Bar1"}, "lat": 1, "lon": 1},  # inside
+        {"type": "node", "id": 2, "tags": {"name": "Bar1"}, "lat": 5, "lon": 5},  # outside
+        {"type": "node", "id": 3, "tags": {"name": "Bar2"}, "lat": 5, "lon": 5},  # outside only
     ]
     resp = FakeResp({"elements": elements})
     bbox = (0, 2, 0, 2)
@@ -82,13 +56,86 @@ def test_coletar_pois_addr_city():
          mock.patch("data_fetch.get_city_polygon", return_value=None), \
          mock.patch("data_fetch.session.post", return_value=resp):
         pois = data_fetch.coletar_pois("cidade")
-        assert pois == [{"name": "Bar1", "lat": 1.0, "lon": 1.0}]
+        assert pois == [
+            {
+                "poi_id": "osm:node:1",
+                "osm_type": "node",
+                "osm_id": 1,
+                "name": "Bar1",
+                "amenity": None,
+                "lat": 1.0,
+                "lon": 1.0,
+            }
+        ]
+
+
+def test_coletar_pois_dedup_inside():
+    elements = [
+        {"type": "node", "id": 10, "tags": {"name": "Bar1"}, "lat": 1, "lon": 1},
+        {"type": "node", "id": 10, "tags": {"name": "Bar1"}, "lat": 1.1, "lon": 1.1},
+    ]
+    resp = FakeResp({"elements": elements})
+    bbox = (0, 2, 0, 2)
+    with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
+         mock.patch("data_fetch.get_city_area_id", return_value=None), \
+         mock.patch("data_fetch.get_city_polygon", return_value=None), \
+         mock.patch("data_fetch.session.post", return_value=resp):
+        pois = data_fetch.coletar_pois("cidade")
+        assert pois == [
+            {
+                "poi_id": "osm:node:10",
+                "osm_type": "node",
+                "osm_id": 10,
+                "name": "Bar1",
+                "amenity": None,
+                "lat": 1.0,
+                "lon": 1.0,
+            }
+        ]
+
+
+def test_coletar_pois_addr_city():
+    elements = [
+        {
+            "type": "node",
+            "id": 21,
+            "tags": {"name": "Bar1", "addr:city": "cidade"},
+            "lat": 1,
+            "lon": 1,
+        },
+        {
+            "type": "node",
+            "id": 22,
+            "tags": {"name": "Bar2", "addr:city": "Outra"},
+            "lat": 1.5,
+            "lon": 1.5,
+        },
+    ]
+    resp = FakeResp({"elements": elements})
+    bbox = (0, 2, 0, 2)
+    with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
+         mock.patch("data_fetch.get_city_area_id", return_value=None), \
+         mock.patch("data_fetch.get_city_polygon", return_value=None), \
+         mock.patch("data_fetch.session.post", return_value=resp):
+        pois = data_fetch.coletar_pois("cidade")
+        assert pois == [
+            {
+                "poi_id": "osm:node:21",
+                "osm_type": "node",
+                "osm_id": 21,
+                "name": "Bar1",
+                "amenity": None,
+                "lat": 1.0,
+                "lon": 1.0,
+                "addr:city": "cidade",
+            }
+        ]
 
 
 def test_coletar_pois_polygon():
     elements = [
-        {"tags": {"name": "Bar1"}, "lat": 1, "lon": 1},
-        {"tags": {"name": "Bar2"}, "lat": 5, "lon": 5},
+        {"type": "node", "id": 31, "tags": {"name": "Bar1"}, "lat": 1, "lon": 1},
+        {"type": "node", "id": 32, "tags": {"name": "Bar2"}, "lat": 5, "lon": 5},
     ]
     resp = FakeResp({"elements": elements})
 
@@ -102,4 +149,14 @@ def test_coletar_pois_polygon():
          mock.patch("data_fetch.get_city_polygon", return_value=DummyPoly()), \
          mock.patch("data_fetch.session.post", return_value=resp):
         pois = data_fetch.coletar_pois("cidade")
-        assert pois == [{"name": "Bar1", "lat": 1.0, "lon": 1.0}]
+        assert pois == [
+            {
+                "poi_id": "osm:node:31",
+                "osm_type": "node",
+                "osm_id": 31,
+                "name": "Bar1",
+                "amenity": None,
+                "lat": 1.0,
+                "lon": 1.0,
+            }
+        ]
