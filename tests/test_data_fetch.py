@@ -67,6 +67,7 @@ def test_coletar_pois_bbox_filtering():
                 "amenity": None,
                 "lat": 1.0,
                 "lon": 1.0,
+                "source": "osm",
             }
         ]
 
@@ -93,6 +94,7 @@ def test_coletar_pois_dedup_inside():
                 "amenity": None,
                 "lat": 1.0,
                 "lon": 1.0,
+                "source": "osm",
             }
         ]
 
@@ -132,6 +134,7 @@ def test_coletar_pois_addr_city():
                 "lat": 1.0,
                 "lon": 1.0,
                 "addr:city": "cidade",
+                "source": "osm",
             }
         ]
 
@@ -162,6 +165,7 @@ def test_coletar_pois_polygon():
                 "amenity": None,
                 "lat": 1.0,
                 "lon": 1.0,
+                "source": "osm",
             }
         ]
 
@@ -211,5 +215,6 @@ def test_coletar_pois_anti_vazamento_bbox():
                 "amenity": None,
                 "lat": 1.0,
                 "lon": 1.0,
+                "source": "osm",
             }
         ]

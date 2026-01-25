@@ -43,6 +43,12 @@ OVERPASS_TIMEOUT = 60
 class PoisFetchReport:
     tiles_total: int
     tiles_failed: int
+    osm_total: int = 0
+    overture_total: int = 0
+    combined_total: int = 0
+    trimmed_total: int = 0
+    overture_enabled: bool = False
+    overture_error: str | None = None
 
 
 @dataclass
@@ -172,6 +178,7 @@ def _normalize_poi(el: dict) -> dict | None:
         "amenity": tags.get("amenity"),
         "lat": float(lat),
         "lon": float(lon),
+        "source": "osm",
     }
     extra_tags = {
         key: value

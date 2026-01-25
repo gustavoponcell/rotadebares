@@ -1,11 +1,13 @@
 import logging
+import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from data_fetch import PoisFetchReport, PoisFetchResult, batch_altitude, coletar_pois, osrm_table
-from geocoding import geocode_fallback_single, geocode_strict_single
+from geocoding import geocode_fallback_single, geocode_strict_single, get_city_bbox
 from mapping import build_map
 from optimization import apply_elevation_penalty, solve_tsp
+from overture_fetch import fetch_overture_places, is_overture_enabled
 
 log = logging.getLogger(__name__)
 
@@ -16,13 +18,71 @@ class RouteResult:
     map_html: str
 
 
-def load_pois(city: str) -> PoisFetchResult:
-    """Carrega POIs para um município usando o Overpass."""
+def _trim_pois_by_bbox_center(
+    pois: List[dict],
+    bbox: Optional[Tuple[float, float, float, float]],
+    limit: int,
+) -> List[dict]:
+    if limit <= 0 or len(pois) <= limit:
+        return pois
+    if not bbox:
+        return pois[:limit]
+    south, north, west, east = bbox
+    center_lat = (south + north) / 2.0
+    center_lon = (west + east) / 2.0
+
+    def dist_sq(poi: dict) -> float:
+        lat = float(poi.get("lat", 0.0))
+        lon = float(poi.get("lon", 0.0))
+        cos_lat = math.cos(math.radians(center_lat))
+        dx = (lon - center_lon) * cos_lat
+        dy = lat - center_lat
+        return dx * dx + dy * dy
+
+    return sorted(pois, key=dist_sq)[:limit]
+
+
+def load_pois(
+    city: str,
+    include_overture: Optional[bool] = None,
+    overture_limit: int = 300,
+    combined_limit: int = 300,
+) -> PoisFetchResult:
+    """Carrega POIs para um município usando o Overpass e, opcionalmente, Overture."""
 
     city = city.strip()
     if not city:
         return PoisFetchResult(pois=[], report=PoisFetchReport(tiles_total=0, tiles_failed=0))
-    return coletar_pois(city)
+
+    osm_result = coletar_pois(city)
+    report = osm_result.report
+    report.osm_total = len(osm_result.pois)
+
+    overture_enabled = is_overture_enabled() if include_overture is None else include_overture
+    overture_pois: List[dict] = []
+    if overture_enabled and is_overture_enabled():
+        bbox = get_city_bbox(city)
+        if bbox:
+            try:
+                overture_pois = fetch_overture_places(
+                    (bbox[2], bbox[0], bbox[3], bbox[1]),
+                    limit=overture_limit,
+                )
+            except Exception as exc:
+                report.overture_error = str(exc)
+                log.warning("Falha ao buscar Overture Places: %s", exc)
+        else:
+            report.overture_error = "bbox não encontrada"
+
+    combined = list(osm_result.pois) + list(overture_pois)
+    report.overture_enabled = bool(overture_enabled and is_overture_enabled())
+    report.overture_total = len(overture_pois)
+    report.combined_total = len(combined)
+
+    trimmed = _trim_pois_by_bbox_center(combined, get_city_bbox(city), combined_limit)
+    report.trimmed_total = max(0, report.combined_total - len(trimmed))
+
+    return PoisFetchResult(pois=trimmed, report=report)
 
 
 def compute_route_and_map(
