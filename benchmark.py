@@ -13,7 +13,7 @@ DIST = [
 ]
 
 
-def bench(func, name, loops=100):
+def bench(func, name, loops=5):
     t0 = time.perf_counter()
     for _ in range(loops):
         func(DIST, 0, 3)
@@ -22,6 +22,6 @@ def bench(func, name, loops=100):
 
 
 if __name__ == "__main__":
-    bench(solve_tsp, "solve_tsp")
-    bench(solve_tsp_guided_local_search, "solve_tsp_guided_local_search")
+    bench(lambda d, s, e: solve_tsp(d, s, e, time_limit_s=1), "solve_tsp")
+    bench(lambda d, s, e: solve_tsp_guided_local_search(d, s, e, time_limit_s=1), "solve_tsp_guided_local_search")
     bench(christofides_tsp, "christofides_tsp")

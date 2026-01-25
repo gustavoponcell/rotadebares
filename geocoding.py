@@ -1,8 +1,8 @@
-import logging
 from functools import lru_cache
 from typing import Optional, Tuple, Any
 
 import requests
+from loguru import logger
 
 try:  # Shapely é opcional
     from shapely.geometry import Polygon, Point
@@ -14,7 +14,7 @@ from geopy.geocoders import Nominatim, Photon
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.exc import GeocoderTimedOut
 
-log = logging.getLogger(__name__)
+from http_client import get_session
 
 # Inicializa geocoders e cache
 geolocator = Nominatim(user_agent="tsp_app", timeout=10)
@@ -34,8 +34,9 @@ def get_city_area_id(city_name: str) -> Optional[int]:
     [out:json][timeout:25];
     rel["name"="{city_name}"]["boundary"="administrative"]["admin_level"="8"];out ids;
     """
+    session = get_session()
     try:
-        resp = requests.post(
+        resp = session.post(
             "http://overpass-api.de/api/interpreter", data={"data": q}, timeout=25
         )
         resp.raise_for_status()
@@ -44,7 +45,7 @@ def get_city_area_id(city_name: str) -> Optional[int]:
             rel_id = elements[0]["id"]
             return 3600000000 + rel_id
     except Exception as e:  # pragma: no cover - log apenas
-        log.error(f"Erro ao obter area id: {e}")
+        logger.error(f"Erro ao obter area id: {e}")
     return None
 
 
@@ -61,8 +62,9 @@ def get_city_polygon(city_name: str) -> Optional[Any]:
     area({area_id})->.a;
     rel(area.a)[boundary="administrative"][admin_level="8"];out geom;
     """
+    session = get_session()
     try:
-        resp = requests.post(
+        resp = session.post(
             "http://overpass-api.de/api/interpreter", data={"data": q}, timeout=25
         )
         resp.raise_for_status()
@@ -73,7 +75,7 @@ def get_city_polygon(city_name: str) -> Optional[Any]:
         if coords:
             return Polygon(coords)
     except Exception as e:  # pragma: no cover - log apenas
-        log.error(f"Erro ao obter polígono: {e}")
+        logger.error(f"Erro ao obter polígono: {e}")
     return None
 
 

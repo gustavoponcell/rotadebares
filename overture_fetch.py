@@ -1,8 +1,9 @@
-import logging
 import os
 from typing import List, Tuple
 
-log = logging.getLogger(__name__)
+from loguru import logger
+
+from models import POI
 
 OVERTURE_S3_PATH = "s3://overturemaps-us-west-2/release/latest/theme=places/type=place/*"
 OVERTURE_DEFAULT_LIMIT = 300
@@ -17,7 +18,7 @@ def is_overture_enabled() -> bool:
 def fetch_overture_places(
     bbox: Tuple[float, float, float, float],
     limit: int = OVERTURE_DEFAULT_LIMIT,
-) -> List[dict]:
+) -> List[POI]:
     """Busca lugares do Overture Places dentro de uma bbox.
 
     Parameters
@@ -57,23 +58,22 @@ def fetch_overture_places(
     finally:
         conn.close()
 
-    pois: List[dict] = []
+    pois: List[POI] = []
     for overture_id, name, category, lon, lat in rows:
         if lat is None or lon is None or not name or not name.strip():
             continue
-        poi = {
-            "poi_id": f"overture:{overture_id}",
-            "overture_id": str(overture_id),
-            "name": name,
-            "category": category,
-            "category_raw": category,
-            "lat": float(lat),
-            "lon": float(lon),
-            "source": "overture",
-            "raw_tags": {"category": category, "names": name},
-        }
+        poi = POI(
+            poi_id=f"overture:{overture_id}",
+            name=name,
+            category=category,
+            lat=float(lat),
+            lon=float(lon),
+            source="overture",
+            raw_tags={"category": category, "names": name},
+            extra={"overture_id": str(overture_id), "category_raw": category},
+        )
         pois.append(poi)
-    log.info("Overture: %s registros retornados na bbox.", len(pois))
+    logger.info("Overture: %s registros retornados na bbox.", len(pois))
     return pois
 
 

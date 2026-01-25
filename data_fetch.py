@@ -1,4 +1,3 @@
-import logging
 import math
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -6,18 +5,19 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from loguru import logger
 
+from cache import DEFAULT_CACHE, make_cache_key, stable_coords
+from config import DEFAULT_SETTINGS
 from geocoding import (
-    get_city_bbox,
     dentro_da_cidade,
     get_city_area_id,
+    get_city_bbox,
     get_city_polygon,
     point_in_polygon,
 )
-
-log = logging.getLogger(__name__)
+from http_client import get_session
+from models import POI
 
 OSM_AMENITY_TAGS = [
     "bar",
@@ -56,14 +56,7 @@ AMENITY_TAGS = [
     "petiscaria",
 ]
 
-# Sessao HTTP com retries
-session = requests.Session()
-retries = Retry(total=5, backoff_factor=1, status_forcelist=[502, 504, 522, 524], allowed_methods=["GET", "POST"])
-adapter = HTTPAdapter(max_retries=retries)
-session.mount("http://", adapter)
-session.mount("https://", adapter)
-
-OVERPASS_TIMEOUT = 60
+OVERPASS_TIMEOUT = DEFAULT_SETTINGS.overpass_timeout
 
 
 @dataclass
@@ -93,7 +86,7 @@ class PoisFetchReport:
 
 @dataclass
 class PoisFetchResult:
-    pois: List[dict]
+    pois: List[POI]
     report: PoisFetchReport
 
 
@@ -197,7 +190,7 @@ def _build_overpass_query(
     """
 
 
-def _normalize_poi(el: dict) -> dict | None:
+def _normalize_poi(el: dict) -> POI | None:
     osm_type = el.get("type")
     osm_id = el.get("id")
     if not osm_type or osm_id is None:
@@ -215,39 +208,38 @@ def _normalize_poi(el: dict) -> dict | None:
     name = tags.get("name")
     if not name or not name.strip():
         return None
-    poi = {
-        "poi_id": f"osm:{osm_type}:{osm_id}",
-        "osm_type": osm_type,
-        "osm_id": osm_id,
-        "name": name,
-        "amenity": tags.get("amenity"),
-        "category": tags.get("amenity"),
-        "lat": float(lat),
-        "lon": float(lon),
-        "source": "osm",
-        "raw_tags": tags,
-    }
     extra_tags = {
         key: value
         for key, value in tags.items()
         if key.startswith("addr:") or key in {"opening_hours", "cuisine"}
     }
-    poi.update(extra_tags)
-    return poi
+    return POI(
+        poi_id=f"osm:{osm_type}:{osm_id}",
+        osm_type=osm_type,
+        osm_id=int(osm_id),
+        name=name,
+        amenity=tags.get("amenity"),
+        category=tags.get("amenity"),
+        lat=float(lat),
+        lon=float(lon),
+        source="osm",
+        raw_tags=tags,
+        extra=extra_tags,
+    )
 
 
-def _sample_pois(pois: List[dict], limit: int = 5) -> List[dict]:
+def _sample_pois(pois: List[POI], limit: int = 5) -> List[dict]:
     sample: List[dict] = []
     for poi in pois[:limit]:
         sample.append(
             {
-                "poi_id": poi.get("poi_id"),
-                "name": poi.get("name"),
-                "source": poi.get("source"),
-                "amenity": poi.get("amenity") or poi.get("category"),
-                "lat": poi.get("lat"),
-                "lon": poi.get("lon"),
-                "raw_tags": poi.get("raw_tags"),
+                "poi_id": poi.poi_id,
+                "name": poi.name,
+                "source": poi.source,
+                "amenity": poi.amenity or poi.category,
+                "lat": poi.lat,
+                "lon": poi.lon,
+                "raw_tags": poi.raw_tags,
             }
         )
     return sample
@@ -261,6 +253,7 @@ def _fetch_overpass_elements(
 ) -> Tuple[List[dict] | None, dict | None]:
     for attempt in range(1, max_retries + 1):
         try:
+            session = get_session()
             resp = session.post("http://overpass-api.de/api/interpreter", data={"data": query}, timeout=timeout)
             status = resp.status_code
             if status == 429 or status >= 500:
@@ -274,10 +267,10 @@ def _fetch_overpass_elements(
                 if snippet:
                     error_info["response_snippet"] = snippet
             if attempt == max_retries:
-                log.warning("Overpass falhou após %s tentativas: %s", max_retries, exc)
+                logger.warning("Overpass falhou após %s tentativas: %s", max_retries, exc)
                 return None, error_info
             sleep_s = backoff_factor * (2 ** (attempt - 1))
-            log.warning("Overpass falhou (tentativa %s/%s). Retentando em %.1fs...", attempt, max_retries, sleep_s)
+            logger.warning("Overpass falhou (tentativa %s/%s). Retentando em %.1fs...", attempt, max_retries, sleep_s)
             time.sleep(sleep_s)
     return None, {"error": "Overpass falhou sem detalhes"}
 
@@ -285,14 +278,27 @@ def _fetch_overpass_elements(
 def coletar_pois(
     cidade: str,
     selected_amenities: List[str] | None = None,
-    max_tiles_total: int = 16,
-    overlap_m: int = 200,
-    max_workers: int = 4,
+    max_tiles_total: int = DEFAULT_SETTINGS.max_tiles_total,
+    overlap_m: int = DEFAULT_SETTINGS.overlap_m,
+    max_workers: int = DEFAULT_SETTINGS.max_workers,
     max_retries: int = 3,
     backoff_factor: float = 1.0,
     overpass_timeout: int = OVERPASS_TIMEOUT,
 ) -> PoisFetchResult:
     """Busca bares e restaurantes via Overpass."""
+    cache_key = make_cache_key(
+        "overpass_pois",
+        {
+            "cidade": cidade,
+            "amenities": sorted(selected_amenities or OSM_AMENITY_TAGS),
+            "max_tiles_total": max_tiles_total,
+            "overlap_m": overlap_m,
+        },
+    )
+    cached = DEFAULT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     bbox = get_city_bbox(cidade)
     area_id = get_city_area_id(cidade)
     poly = get_city_polygon(cidade)
@@ -301,7 +307,7 @@ def coletar_pois(
         bbox_tiles = tile_bbox((bbox[2], bbox[0], bbox[3], bbox[1]), max_tiles_total, overlap_m)
     else:
         bbox_tiles = [None]
-    log.info("Overpass bbox=%s area_id=%s tiles=%s", bbox, area_id, len(bbox_tiles))
+    logger.info("Overpass bbox=%s area_id=%s tiles=%s", bbox, area_id, len(bbox_tiles))
 
     def fetch_tile(
         tile: Tuple[float, float, float, float] | None,
@@ -330,7 +336,7 @@ def coletar_pois(
     raw_total = 0
     parsed_total = 0
     merged_total = 0
-    pois_by_id: Dict[str, dict] = {}
+    pois_by_id: Dict[str, POI] = {}
     tile_raw_counts: List[dict] = []
     overpass_errors: List[dict] = []
     with ThreadPoolExecutor(max_workers=min(max_workers, len(bbox_tiles))) as executor:
@@ -342,12 +348,12 @@ def coletar_pois(
                 overpass_errors.append(error_payload)
             if elements is None:
                 tiles_failed += 1
-                log.warning("Tile Overpass falhou: %s", tile)
+                logger.warning("Tile Overpass falhou: %s", tile)
                 continue
             raw_count = len(elements)
             raw_total += raw_count
             tile_raw_counts.append({"tile": tile, "raw_count": raw_count})
-            log.info("Overpass tile=%s raw_count=%s", tile, raw_count)
+            logger.info("Overpass tile=%s raw_count=%s", tile, raw_count)
             for el in elements:
                 poi = _normalize_poi(el)
                 if not poi:
@@ -357,17 +363,17 @@ def coletar_pois(
                 city_tag = tags.get("addr:city")
                 if city_tag and city_tag.lower() != cidade.lower():
                     continue
-                if poly and not point_in_polygon(poi["lat"], poi["lon"], poly):
+                if poly and not point_in_polygon(poi.lat, poi.lon, poly):
                     continue
                 merged_total += 1
-                poi_id = poi["poi_id"]
+                poi_id = poi.poi_id
                 if poi_id not in pois_by_id:
                     pois_by_id[poi_id] = poi
 
     pois = list(pois_by_id.values())
     dedup_total = len(pois)
     if bbox:
-        pois = [poi for poi in pois if dentro_da_cidade(poi["lat"], poi["lon"], bbox)]
+        pois = [poi for poi in pois if dentro_da_cidade(poi.lat, poi.lon, bbox)]
     bbox_filtered_total = len(pois)
 
     report = PoisFetchReport(
@@ -385,8 +391,8 @@ def coletar_pois(
         overpass_errors=overpass_errors,
     )
     if tiles_failed:
-        log.warning("Overpass retornou dados parciais: %s tiles falharam.", tiles_failed)
-    log.info(
+        logger.warning("Overpass retornou dados parciais: %s tiles falharam.", tiles_failed)
+    logger.info(
         "Overpass contagens: raw=%s parsed=%s merged=%s dedup=%s bbox=%s",
         raw_total,
         parsed_total,
@@ -396,39 +402,71 @@ def coletar_pois(
     )
     if len(pois) <= 1:
         report.sample_pois = _sample_pois(pois)
-        log.warning("Overpass retornou poucos POIs (%s). Amostra: %s", len(pois), report.sample_pois)
-    return PoisFetchResult(pois=pois, report=report)
+        logger.warning("Overpass retornou poucos POIs (%s). Amostra: %s", len(pois), report.sample_pois)
+    result = PoisFetchResult(pois=pois, report=report)
+    DEFAULT_CACHE.set(cache_key, result)
+    return result
 
 
-def batch_altitude(latlons: List[Tuple[float, float]]) -> List[float]:
+def batch_altitude(latlons: List[Tuple[float, float]], timeout: int = DEFAULT_SETTINGS.elevation_timeout) -> List[float]:
     """Obtém altitudes via Open-Elevation."""
+    if not latlons:
+        return []
+    cache_key = make_cache_key(
+        "altitude_batch",
+        {"coords": stable_coords(latlons)},
+    )
+    cached = DEFAULT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    session = get_session()
     locs = [{"latitude": lat, "longitude": lon} for lat, lon in latlons]
     try:
-        resp = session.post("https://api.open-elevation.com/api/v1/lookup", json={"locations": locs}, timeout=30)
+        resp = session.post(
+            "https://api.open-elevation.com/api/v1/lookup",
+            json={"locations": locs},
+            timeout=timeout,
+        )
         resp.raise_for_status()
         data = resp.json().get("results", [])
-        return [r.get("elevation", 0) for r in data]
+        elevations = [r.get("elevation", 0) for r in data]
+        DEFAULT_CACHE.set(cache_key, elevations)
+        return elevations
     except requests.RequestException as e:
-        log.error(f"Erro Open-Elevation: {e}")
+        logger.error(f"Erro Open-Elevation: {e}")
     except Exception as e:
-        log.error(f"Erro ao processar resposta Open-Elevation: {e}")
+        logger.error(f"Erro ao processar resposta Open-Elevation: {e}")
     return [0] * len(locs)
 
 
-def osrm_table(latlons: List[Tuple[float, float]], timeout: int = 30) -> List[List[float]] | None:
+def osrm_table(
+    latlons: List[Tuple[float, float]],
+    timeout: int = DEFAULT_SETTINGS.osrm_timeout,
+    profile: str = DEFAULT_SETTINGS.osrm_profile,
+) -> List[List[float]] | None:
     """Retorna matriz de distâncias usando OSRM."""
     if not latlons:
-        log.error("OSRM Table chamado com lista vazia.")
+        logger.error("OSRM Table chamado com lista vazia.")
         return None
+    cache_key = make_cache_key(
+        "osrm_table",
+        {"coords": stable_coords(latlons), "profile": profile},
+    )
+    cached = DEFAULT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     coord_str = ";".join(f"{lon},{lat}" for lat, lon in latlons)
-    url = f"http://router.project-osrm.org/table/v1/foot/{coord_str}"
+    url = f"http://router.project-osrm.org/table/v1/{profile}/{coord_str}"
     params = {"annotations": "distance"}
+    session = get_session()
     try:
         resp = session.get(url, params=params, timeout=timeout)
         resp.raise_for_status()
-        return resp.json().get("distances", [])
+        distances = resp.json().get("distances", [])
+        DEFAULT_CACHE.set(cache_key, distances)
+        return distances
     except requests.RequestException as e:
-        log.warning(f"OSRM Table falhou, tentando linha a linha: {e}")
+        logger.warning(f"OSRM Table falhou, tentando linha a linha: {e}")
 
         def fetch_row(i: int):
             try:
@@ -436,7 +474,7 @@ def osrm_table(latlons: List[Tuple[float, float]], timeout: int = 30) -> List[Li
                 r.raise_for_status()
                 return i, r.json().get("distances", [[0] * len(latlons)])[0]
             except Exception as exc:
-                log.error(f"OSRM Table linha {i} falhou: {exc}")
+                logger.error(f"OSRM Table linha {i} falhou: {exc}")
                 return i, None
 
         results = [None] * len(latlons)
@@ -445,12 +483,13 @@ def osrm_table(latlons: List[Tuple[float, float]], timeout: int = 30) -> List[Li
             for fut in as_completed(futures):
                 idx, row = fut.result()
                 if row is None:
-                    log.error("Falha ao recuperar tabela OSRM linha a linha.")
+                    logger.error("Falha ao recuperar tabela OSRM linha a linha.")
                     return None
                 results[idx] = row
+        DEFAULT_CACHE.set(cache_key, results)
         return results
     except Exception as e:
-        log.error(f"Erro ao processar resposta OSRM: {e}")
+        logger.error(f"Erro ao processar resposta OSRM: {e}")
         return None
 
 __all__ = [
@@ -463,5 +502,4 @@ __all__ = [
     "coletar_pois",
     "batch_altitude",
     "osrm_table",
-    "session",
 ]

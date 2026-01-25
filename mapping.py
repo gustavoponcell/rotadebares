@@ -1,26 +1,27 @@
-import logging
 from typing import List, Tuple
 
 import folium
 import requests
+from loguru import logger
 
-from data_fetch import session
+from config import DEFAULT_SETTINGS
+from http_client import get_session
 
-log = logging.getLogger(__name__)
+session = get_session()
 
 
 def fetch_route_geometry(a: Tuple[float, float], b: Tuple[float, float]) -> List[Tuple[float, float]]:
     """Busca linha de caminho entre dois pontos via OSRM."""
     url = f"http://router.project-osrm.org/route/v1/foot/{a[1]},{a[0]};{b[1]},{b[0]}"
     try:
-        resp = session.get(url, params={"overview": "full", "geometries": "geojson"}, timeout=30)
+        resp = session.get(url, params={"overview": "full", "geometries": "geojson"}, timeout=DEFAULT_SETTINGS.osrm_timeout)
         resp.raise_for_status()
         coords = resp.json()["routes"][0]["geometry"]["coordinates"]
         return [(lat, lng) for lng, lat in coords]
     except requests.RequestException as e:
-        log.error(f"Erro OSRM Route: {e}")
+        logger.error(f"Erro OSRM Route: {e}")
     except Exception as e:
-        log.error(f"Erro ao processar resposta OSRM Route: {e}")
+        logger.error(f"Erro ao processar resposta OSRM Route: {e}")
     return []
 
 
@@ -41,14 +42,14 @@ def fetch_route_geometry_multi(points: List[Tuple[float, float]]) -> List[Tuple[
     coord_str = ";".join(f"{lon},{lat}" for lat, lon in points)
     url = f"http://router.project-osrm.org/route/v1/foot/{coord_str}"
     try:
-        resp = session.get(url, params={"overview": "full", "geometries": "geojson"}, timeout=30)
+        resp = session.get(url, params={"overview": "full", "geometries": "geojson"}, timeout=DEFAULT_SETTINGS.osrm_timeout)
         resp.raise_for_status()
         coords = resp.json()["routes"][0]["geometry"]["coordinates"]
         return [(lat, lng) for lng, lat in coords]
     except requests.RequestException as e:
-        log.error(f"Erro OSRM Route múltiplo: {e}")
+        logger.error(f"Erro OSRM Route múltiplo: {e}")
     except Exception as e:
-        log.error(f"Erro ao processar resposta OSRM Route múltiplo: {e}")
+        logger.error(f"Erro ao processar resposta OSRM Route múltiplo: {e}")
     return []
 
 

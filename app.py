@@ -1,9 +1,13 @@
-import logging
+from __future__ import annotations
+
 from typing import Dict, List, Optional, Tuple
 
 import folium
 import streamlit as st
+from loguru import logger
 
+from cache import DEFAULT_CACHE, make_cache_key
+from config import DEFAULT_SETTINGS
 from core import (
     RouteResult,
     approximate_distance_km,
@@ -14,16 +18,13 @@ from core import (
 )
 from data_fetch import AMENITY_TAGS, OSM_AMENITY_TAGS, PTBR_TEXT_TAGS
 from geocoding import geocode_fallback_single, geocode_strict_single, get_city_bbox
+from models import POI
 from overture_fetch import is_overture_enabled
-
-
-logging.basicConfig(level=logging.INFO)
 
 st.set_page_config(page_title="Roteirização de Bares", layout="wide")
 
 st.title("Roteirização de Bares e Restaurantes")
 
-MAX_OSRM_POIS = 300
 PREVIEW_MAP_LIMIT = 200
 
 if "pois" not in st.session_state:
@@ -32,23 +33,25 @@ if "pois_report" not in st.session_state:
     st.session_state.pois_report = None
 if "selected_tags" not in st.session_state:
     st.session_state.selected_tags = list(AMENITY_TAGS)
+if "pois_input_hash" not in st.session_state:
+    st.session_state.pois_input_hash = None
 
 
-@st.cache_data(ttl=3600)
-def cached_fetch_places(
+def _build_input_hash(
     city: str,
-    selected_tags: Tuple[str, ...],
+    selected_tags: List[str],
     include_overture: bool,
-) -> Tuple[List[dict], object]:
-    bbox = get_city_bbox(city)
-    result = fetch_places(
-        city=city,
-        bbox=bbox,
-        selected_tags=list(selected_tags),
-        include_overture=include_overture,
-        combined_limit=MAX_OSRM_POIS,
+    max_pois: int,
+) -> str:
+    return make_cache_key(
+        "preview_inputs",
+        {
+            "city": city.strip().lower(),
+            "tags": sorted(selected_tags),
+            "include_overture": include_overture,
+            "max_pois": max_pois,
+        },
     )
-    return result.pois, result.report
 
 
 def _get_reference_coords(city: str, start_text: str) -> Optional[Tuple[float, float]]:
@@ -63,13 +66,13 @@ def _get_reference_coords(city: str, start_text: str) -> Optional[Tuple[float, f
 
 
 def _compute_counts(
-    pois: List[dict],
+    pois: List[POI],
     selected_tags: List[str],
 ) -> Tuple[Dict[str, int], Dict[str, int]]:
     counts_osm = {tag: 0 for tag in selected_tags if tag in OSM_AMENITY_TAGS}
     counts_text = {tag: 0 for tag in selected_tags if tag in PTBR_TEXT_TAGS}
     for poi in pois:
-        amenity = (poi.get("amenity") or poi.get("category") or "").lower()
+        amenity = (poi.amenity or poi.category or "").lower()
         if amenity in counts_osm:
             counts_osm[amenity] += 1
         if counts_text:
@@ -81,21 +84,21 @@ def _compute_counts(
 
 
 def _build_preview_table(
-    pois: List[dict],
+    pois: List[POI],
     reference: Optional[Tuple[float, float]],
 ) -> List[dict]:
     rows: List[dict] = []
     for poi in pois:
-        lat = float(poi.get("lat", 0.0))
-        lon = float(poi.get("lon", 0.0))
+        lat = float(poi.lat)
+        lon = float(poi.lon)
         distance_km = None
         if reference:
             distance_km = approximate_distance_km(reference[0], reference[1], lat, lon)
         rows.append(
             {
-                "Nome": poi.get("name"),
-                "Tipo": poi.get("amenity") or poi.get("category"),
-                "Fonte": poi.get("source"),
+                "Nome": poi.name,
+                "Tipo": poi.amenity or poi.category,
+                "Fonte": poi.source,
                 "Lat": lat,
                 "Lon": lon,
                 "Distância (km)": round(distance_km, 2) if distance_km is not None else None,
@@ -105,7 +108,7 @@ def _build_preview_table(
 
 
 def _build_preview_map(
-    pois: List[dict],
+    pois: List[POI],
     reference: Optional[Tuple[float, float]],
 ) -> Optional[str]:
     if not pois or len(pois) > PREVIEW_MAP_LIMIT:
@@ -113,14 +116,14 @@ def _build_preview_map(
     if reference:
         center_lat, center_lon = reference
     else:
-        center_lat = float(pois[0].get("lat", 0.0))
-        center_lon = float(pois[0].get("lon", 0.0))
+        center_lat = float(pois[0].lat)
+        center_lon = float(pois[0].lon)
     fmap = folium.Map(location=[center_lat, center_lon], zoom_start=13)
     for poi in pois:
         folium.Marker(
-            location=[poi["lat"], poi["lon"]],
-            popup=f"{poi.get('name')} ({poi.get('amenity') or poi.get('category')})",
-            tooltip=poi.get("name"),
+            location=[poi.lat, poi.lon],
+            popup=f"{poi.name} ({poi.amenity or poi.category})",
+            tooltip=poi.name,
         ).add_to(fmap)
     return fmap.get_root().render()
 
@@ -148,14 +151,40 @@ with col_left:
         key="selected_tags",
     )
 
-    if city.strip() and selected_tags:
-        with st.spinner("Carregando lugares…"):
-            pois, report = cached_fetch_places(city.strip(), tuple(selected_tags), include_overture)
-        st.session_state.pois = pois
-        st.session_state.pois_report = report
-    else:
+    max_pois = st.slider(
+        "Máximo de POIs (OSRM)",
+        min_value=50,
+        max_value=800,
+        step=50,
+        value=DEFAULT_SETTINGS.max_pois,
+    )
+
+    refresh_preview = st.button("Atualizar prévia")
+    if st.button("Limpar cache local"):
+        DEFAULT_CACHE.clear()
         st.session_state.pois = []
         st.session_state.pois_report = None
+        st.session_state.pois_input_hash = None
+
+    input_hash = _build_input_hash(city, selected_tags, include_overture, max_pois)
+    should_fetch = refresh_preview or input_hash != st.session_state.pois_input_hash
+
+    if city.strip() and selected_tags and should_fetch:
+        with st.spinner("Carregando lugares…"):
+            result = fetch_places(
+                city=city.strip(),
+                bbox=get_city_bbox(city.strip()),
+                selected_tags=list(selected_tags),
+                include_overture=include_overture,
+                combined_limit=max_pois,
+            )
+        st.session_state.pois = result.pois
+        st.session_state.pois_report = result.report
+        st.session_state.pois_input_hash = input_hash
+    elif not city.strip() or not selected_tags:
+        st.session_state.pois = []
+        st.session_state.pois_report = None
+        st.session_state.pois_input_hash = input_hash
 
     st.markdown("### Prévia")
     if not city.strip():
@@ -163,7 +192,7 @@ with col_left:
     elif not selected_tags:
         st.info("Selecione ao menos uma categoria para visualizar lugares.")
     else:
-        preview_pois = st.session_state.pois
+        preview_pois: List[POI] = st.session_state.pois
         preview_report = st.session_state.pois_report
         if include_overture and preview_report and preview_report.overture_error:
             st.warning("Overture indisponível neste ambiente. Usando apenas OSM.")
@@ -232,12 +261,9 @@ with col_left:
             st.dataframe(preview_rows[:20], use_container_width=True, hide_index=True)
 
     poi_labels: List[str] = []
-    poi_lookup: Dict[str, dict] = {}
+    poi_lookup: Dict[str, POI] = {}
     for idx, poi in enumerate(st.session_state.pois):
-        label = (
-            f"{idx + 1}. {poi['name']}"
-            f" ({poi.get('amenity') or poi.get('category')}, {poi.get('source')})"
-        )
+        label = f"{idx + 1}. {poi.name} ({poi.amenity or poi.category}, {poi.source})"
         poi_labels.append(label)
         poi_lookup[label] = poi
 
@@ -249,6 +275,7 @@ with col_right:
     end = st.text_input("Destino", placeholder="Ex.: Rua Barão…, 208", key="end")
     extras_text = st.text_area("Extras (um por linha)")
     elev_weight = st.slider("Peso subida", min_value=0.0, max_value=5.0, step=0.1, value=0.0)
+    auto_reduce = st.checkbox("Reduzir pontos automaticamente se OSRM falhar", value=True)
 
 compute_clicked = st.button("Calcular rota")
 
@@ -260,11 +287,11 @@ if compute_clicked:
         st.error("Informe um município.")
     elif not start.strip():
         st.error("Informe a partida.")
-    elif not selected_pois:
-        st.error("Selecione ao menos um POI.")
+    elif not selected_pois and not extras:
+        st.error("Selecione ao menos um POI ou extra.")
     else:
         trimmed_selected_pois = selected_pois
-        if len(selected_pois) > MAX_OSRM_POIS:
+        if len(selected_pois) > max_pois:
             start_coords = None
             geo = geocode_strict_single(start.strip(), city.strip()) or geocode_fallback_single(start.strip(), city.strip())
             if geo:
@@ -273,7 +300,7 @@ if compute_clicked:
                 selected_pois,
                 start_coords,
                 get_city_bbox(city.strip()),
-                MAX_OSRM_POIS,
+                max_pois,
             )
             if trimmed_total:
                 st.warning(
@@ -290,13 +317,18 @@ if compute_clicked:
                 selected_pois=trimmed_selected_pois,
                 extras=extras,
                 elev_weight=float(elev_weight),
+                auto_reduce_on_osrm_fail=auto_reduce,
             )
         except ValueError as exc:
             st.error(str(exc))
         except Exception as exc:  # pragma: no cover - fallback visual
+            logger.exception("Erro inesperado")
             st.error(f"Erro inesperado: {exc}")
 
 if result:
+    if result.warnings:
+        for warning in result.warnings:
+            st.warning(warning)
     st.success("Rota calculada com sucesso!")
     st.components.v1.html(result.map_html, height=600, scrolling=True)
     st.download_button(

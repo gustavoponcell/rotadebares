@@ -1,9 +1,14 @@
+from __future__ import annotations
+
 import logging
 
 import ipywidgets as widgets
-from IPython.display import display, clear_output, FileLink
+from IPython.display import FileLink, clear_output, display
 
-from core import compute_route_and_map, load_pois
+from cache import DEFAULT_CACHE
+from config import DEFAULT_SETTINGS
+from core import compute_route_and_map, load_pois, trim_pois_for_osrm
+from geocoding import geocode_fallback_single, geocode_strict_single, get_city_bbox
 
 log = logging.getLogger(__name__)
 
@@ -33,11 +38,20 @@ class WidgetHandler(logging.Handler):
 
 city_widget = widgets.Text(value="Diamantina", description="Município:")
 load_pois_btn = widgets.Button(description="Buscar Locais", button_style="info")
-pois_box = widgets.VBox([], layout=widgets.Layout(overflow='auto', height='300px', border='1px solid #ccc'))
+clear_cache_btn = widgets.Button(description="Limpar cache", button_style="warning")
+pois_box = widgets.VBox([], layout=widgets.Layout(overflow="auto", height="300px", border="1px solid #ccc"))
 custom_txt = widgets.Textarea(placeholder="Extras (uma linha cada)", description="Extras:")
 start_txt = widgets.Text(placeholder="Ex.: Rua das Mercês, 310", description="Partida:")
 end_txt = widgets.Text(placeholder="Ex.: Rua Barão…, 208", description="Destino:")
 same_cb = widgets.Checkbox(description="Partida = Destino")
+max_pois_slider = widgets.IntSlider(
+    value=DEFAULT_SETTINGS.max_pois,
+    min=50,
+    max=800,
+    step=50,
+    description="Max POIs:",
+)
+auto_reduce_cb = widgets.Checkbox(description="Reduzir pontos se OSRM falhar", value=True)
 elev_weight = widgets.FloatSlider(
     value=0.0,
     min=0.0,
@@ -62,13 +76,13 @@ def on_load_pois(_: widgets.Button) -> None:
     with out:
         clear_output()
     log.info(f"🔍 Buscando POIs em {city_widget.value}…")
-    result = load_pois(city_widget.value.strip())
+    result = load_pois(city_widget.value.strip(), combined_limit=max_pois_slider.value)
     pois = result.pois
     pois_checkboxes.clear()
     pois_data.clear()
     items = []
     for p in pois:
-        desc = f"{p['name']} ({p['lat']:.5f},{p['lon']:.5f})"
+        desc = f"{p.name} ({p.lat:.5f},{p.lon:.5f})"
         cb = widgets.Checkbox(False, description=desc)
         pois_checkboxes.append(cb)
         pois_data.append(p)
@@ -81,11 +95,16 @@ def on_load_pois(_: widgets.Button) -> None:
         log.warning("⚠️ Muitos POIs encontrados (>500). Considere filtrar ou reduzir a área.")
 
 
+def on_clear_cache(_: widgets.Button) -> None:
+    DEFAULT_CACHE.clear()
+    log.info("🧹 Cache local limpo.")
+
+
 def on_same_change(change: dict) -> None:
     """Sincroniza partida e destino quando o checkbox é marcado."""
 
-    end_txt.disabled = change['new']
-    if change['new']:
+    end_txt.disabled = change["new"]
+    if change["new"]:
         end_txt.value = start_txt.value
 
 
@@ -100,10 +119,23 @@ def on_compute(_: widgets.Button) -> None:
     end = start if same_cb.value else end_txt.value.strip()
 
     filename = "rota_otimizada.html"
-    selected_pois = [
-        poi for poi, cb in zip(pois_data, pois_checkboxes) if cb.value
-    ]
+    selected_pois = [poi for poi, cb in zip(pois_data, pois_checkboxes) if cb.value]
     extras = [l.strip() for l in custom_txt.value.splitlines() if l.strip()]
+
+    if len(selected_pois) > max_pois_slider.value:
+        geo = geocode_strict_single(start, city) or geocode_fallback_single(start, city)
+        start_coords = (geo[0], geo[1]) if geo else None
+        selected_pois, removed = trim_pois_for_osrm(
+            selected_pois,
+            start_coords,
+            get_city_bbox(city),
+            max_pois_slider.value,
+        )
+        if removed:
+            log.warning(
+                f"⚠️ Muitos POIs selecionados. Mantendo {len(selected_pois)} e removendo {removed} pontos."
+            )
+
     try:
         result = compute_route_and_map(
             city=city,
@@ -112,6 +144,7 @@ def on_compute(_: widgets.Button) -> None:
             selected_pois=selected_pois,
             extras=extras,
             elev_weight=float(elev_weight.value),
+            auto_reduce_on_osrm_fail=auto_reduce_cb.value,
         )
     except ValueError as exc:
         log.error(f"❌ {exc}")
@@ -127,24 +160,30 @@ def launch_ui() -> None:
     """Exibe a interface interativa no notebook."""
 
     load_pois_btn.on_click(on_load_pois)
+    clear_cache_btn.on_click(on_clear_cache)
     same_cb.observe(on_same_change, "value")
     compute_btn.on_click(on_compute)
 
     ui = widgets.HBox(
         [
             widgets.VBox(
-                [city_widget, load_pois_btn, widgets.Label("Selecione POIs:"), pois_box]
+                [city_widget, load_pois_btn, clear_cache_btn, widgets.Label("Selecione POIs:"), pois_box]
             ),
-            widgets.VBox([
-                start_txt,
-                end_txt,
-                same_cb,
-                elev_weight,
-                custom_txt,
-                compute_btn,
-            ]),
+            widgets.VBox(
+                [
+                    start_txt,
+                    end_txt,
+                    same_cb,
+                    max_pois_slider,
+                    auto_reduce_cb,
+                    elev_weight,
+                    custom_txt,
+                    compute_btn,
+                ]
+            ),
         ]
     )
     display(ui, out)
+
 
 __all__ = ["launch_ui"]
