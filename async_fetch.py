@@ -22,6 +22,13 @@ AMENITY_TAGS = [
     "cafe",
     "restaurant",
     "fast_food",
+    "república",
+    "lanchonete",
+    "cervejaria",
+    "boate",
+    "choperia",
+    "boteco",
+    "petiscaria"
 ]
 
 _session: aiohttp.ClientSession | None = None

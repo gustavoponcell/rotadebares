@@ -26,7 +26,7 @@ with col_left:
     city = st.text_input("Município", value="Diamantina")
     overture_flag_enabled = is_overture_enabled()
     if overture_flag_enabled:
-        include_overture = st.checkbox("Incluir Overture Places (experimental)", value=False)
+        include_overture = st.checkbox("Incluir Overture Places (experimental)", value=False )
     else:
         include_overture = st.checkbox(
             "Incluir Overture Places (experimental)",

@@ -59,7 +59,7 @@ def fetch_overture_places(
 
     pois: List[dict] = []
     for overture_id, name, category, lon, lat in rows:
-        if lat is None or lon is None:
+        if lat is None or lon is None or not name or not name.strip():
             continue
         poi = {
             "poi_id": f"overture:{overture_id}",

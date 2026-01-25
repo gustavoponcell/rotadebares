@@ -170,11 +170,14 @@ def _normalize_poi(el: dict) -> dict | None:
     if lat is None or lon is None:
         return None
     tags = el.get("tags", {})
+    name = tags.get("name")
+    if not name or not name.strip():
+        return None
     poi = {
         "poi_id": f"osm:{osm_type}:{osm_id}",
         "osm_type": osm_type,
         "osm_id": osm_id,
-        "name": tags.get("name"),
+        "name": name,
         "amenity": tags.get("amenity"),
         "lat": float(lat),
         "lon": float(lon),
