@@ -2,7 +2,7 @@ import logging
 import math
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
 import requests
@@ -76,6 +76,19 @@ class PoisFetchReport:
     trimmed_total: int = 0
     overture_enabled: bool = False
     overture_error: str | None = None
+    bbox: Tuple[float, float, float, float] | None = None
+    area_id: int | None = None
+    tiles: List[Tuple[float, float, float, float]] = field(default_factory=list)
+    tile_raw_counts: List[dict] = field(default_factory=list)
+    raw_total: int = 0
+    parsed_total: int = 0
+    merged_total: int = 0
+    dedup_total: int = 0
+    bbox_filtered_total: int = 0
+    text_filtered_total: int = 0
+    limit_total: int = 0
+    overpass_errors: List[dict] = field(default_factory=list)
+    sample_pois: List[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -223,12 +236,29 @@ def _normalize_poi(el: dict) -> dict | None:
     return poi
 
 
+def _sample_pois(pois: List[dict], limit: int = 5) -> List[dict]:
+    sample: List[dict] = []
+    for poi in pois[:limit]:
+        sample.append(
+            {
+                "poi_id": poi.get("poi_id"),
+                "name": poi.get("name"),
+                "source": poi.get("source"),
+                "amenity": poi.get("amenity") or poi.get("category"),
+                "lat": poi.get("lat"),
+                "lon": poi.get("lon"),
+                "raw_tags": poi.get("raw_tags"),
+            }
+        )
+    return sample
+
+
 def _fetch_overpass_elements(
     query: str,
     max_retries: int,
     backoff_factor: float,
     timeout: int,
-) -> List[dict] | None:
+) -> Tuple[List[dict] | None, dict | None]:
     for attempt in range(1, max_retries + 1):
         try:
             resp = session.post("http://overpass-api.de/api/interpreter", data={"data": query}, timeout=timeout)
@@ -236,15 +266,20 @@ def _fetch_overpass_elements(
             if status == 429 or status >= 500:
                 raise requests.HTTPError(f"Overpass status {status}", response=resp)
             resp.raise_for_status()
-            return resp.json().get("elements", [])
+            return resp.json().get("elements", []), None
         except (requests.RequestException, ValueError) as exc:
+            error_info = {"error": str(exc)}
+            if isinstance(exc, requests.HTTPError) and exc.response is not None:
+                snippet = (exc.response.text or "")[:500]
+                if snippet:
+                    error_info["response_snippet"] = snippet
             if attempt == max_retries:
                 log.warning("Overpass falhou após %s tentativas: %s", max_retries, exc)
-                break
+                return None, error_info
             sleep_s = backoff_factor * (2 ** (attempt - 1))
             log.warning("Overpass falhou (tentativa %s/%s). Retentando em %.1fs...", attempt, max_retries, sleep_s)
             time.sleep(sleep_s)
-    return None
+    return None, {"error": "Overpass falhou sem detalhes"}
 
 
 def coletar_pois(
@@ -266,10 +301,11 @@ def coletar_pois(
         bbox_tiles = tile_bbox((bbox[2], bbox[0], bbox[3], bbox[1]), max_tiles_total, overlap_m)
     else:
         bbox_tiles = [None]
+    log.info("Overpass bbox=%s area_id=%s tiles=%s", bbox, area_id, len(bbox_tiles))
 
     def fetch_tile(
         tile: Tuple[float, float, float, float] | None,
-    ) -> Tuple[Tuple[float, float, float, float] | None, List[dict] | None]:
+    ) -> Tuple[Tuple[float, float, float, float] | None, List[dict] | None, dict | None]:
         if tile:
             tile_bbox_overpass = (tile[1], tile[3], tile[0], tile[2])
             query = _build_overpass_query(
@@ -287,40 +323,80 @@ def coletar_pois(
                 selected_amenities,
                 timeout=overpass_timeout,
             )
-        elements = _fetch_overpass_elements(query, max_retries, backoff_factor, overpass_timeout)
-        return tile, elements
+        elements, error_info = _fetch_overpass_elements(query, max_retries, backoff_factor, overpass_timeout)
+        return tile, elements, error_info
 
     tiles_failed = 0
+    raw_total = 0
+    parsed_total = 0
+    merged_total = 0
     pois_by_id: Dict[str, dict] = {}
+    tile_raw_counts: List[dict] = []
+    overpass_errors: List[dict] = []
     with ThreadPoolExecutor(max_workers=min(max_workers, len(bbox_tiles))) as executor:
         futures = [executor.submit(fetch_tile, tile) for tile in bbox_tiles]
         for fut in as_completed(futures):
-            tile, elements = fut.result()
+            tile, elements, error_info = fut.result()
+            if error_info:
+                error_payload = {"tile": tile, **error_info}
+                overpass_errors.append(error_payload)
             if elements is None:
                 tiles_failed += 1
                 log.warning("Tile Overpass falhou: %s", tile)
                 continue
+            raw_count = len(elements)
+            raw_total += raw_count
+            tile_raw_counts.append({"tile": tile, "raw_count": raw_count})
+            log.info("Overpass tile=%s raw_count=%s", tile, raw_count)
             for el in elements:
                 poi = _normalize_poi(el)
                 if not poi:
                     continue
+                parsed_total += 1
                 tags = el.get("tags", {})
                 city_tag = tags.get("addr:city")
                 if city_tag and city_tag.lower() != cidade.lower():
                     continue
                 if poly and not point_in_polygon(poi["lat"], poi["lon"], poly):
                     continue
+                merged_total += 1
                 poi_id = poi["poi_id"]
                 if poi_id not in pois_by_id:
                     pois_by_id[poi_id] = poi
 
     pois = list(pois_by_id.values())
+    dedup_total = len(pois)
     if bbox:
         pois = [poi for poi in pois if dentro_da_cidade(poi["lat"], poi["lon"], bbox)]
+    bbox_filtered_total = len(pois)
 
-    report = PoisFetchReport(tiles_total=len(bbox_tiles), tiles_failed=tiles_failed)
+    report = PoisFetchReport(
+        tiles_total=len(bbox_tiles),
+        tiles_failed=tiles_failed,
+        bbox=bbox,
+        area_id=area_id,
+        tiles=[tile for tile in bbox_tiles if tile],
+        tile_raw_counts=tile_raw_counts,
+        raw_total=raw_total,
+        parsed_total=parsed_total,
+        merged_total=merged_total,
+        dedup_total=dedup_total,
+        bbox_filtered_total=bbox_filtered_total,
+        overpass_errors=overpass_errors,
+    )
     if tiles_failed:
         log.warning("Overpass retornou dados parciais: %s tiles falharam.", tiles_failed)
+    log.info(
+        "Overpass contagens: raw=%s parsed=%s merged=%s dedup=%s bbox=%s",
+        raw_total,
+        parsed_total,
+        merged_total,
+        dedup_total,
+        bbox_filtered_total,
+    )
+    if len(pois) <= 1:
+        report.sample_pois = _sample_pois(pois)
+        log.warning("Overpass retornou poucos POIs (%s). Amostra: %s", len(pois), report.sample_pois)
     return PoisFetchResult(pois=pois, report=report)
 
 

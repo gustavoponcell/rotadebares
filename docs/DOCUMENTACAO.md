@@ -257,6 +257,7 @@ app.py
 - **Prévia automática**: ao selecionar município e tags, o app busca POIs (OSM e opcionalmente Overture) e exibe total, contagem por categoria, matches por texto e tabela detalhada antes de calcular rota. (`app.py`, `core.py`).
 - **Filtros por AMENITY_TAGS**: tags OSM entram no Overpass como filtro `amenity=*`; tags PT-BR fazem filtro textual em `name`, `brand`, `operator`, `description`, `cuisine` e tags cruas. (`app.py`, `core.py`, `data_fetch.py`).
 - **Proteção de escala**: se o total de POIs filtrados exceder o limite (padrão 300), o app corta a lista pelos pontos mais próximos do centro da bbox (ou do start quando já geocodificado) para evitar explosão na chamada OSRM Table. (`app.py`, `core.py`).
+- **Modo debug**: toggle “Modo debug” exibe bbox/area, tiles, contagens por etapa, erros de Overpass, amostras e os primeiros POIs para diagnóstico rápido. (`app.py`, `core.py`, `data_fetch.py`).
 - **Output**: mapa renderizado via `st.components.v1.html` e download do HTML via `st.download_button`. (`app.py`).
 
 ### ipywidgets (UI no Colab)
@@ -293,6 +294,7 @@ python benchmark.py
 - **Uso de `networkx`** em `optimization.py` pode exigir dependência extra não listada em `requirements.txt`. (TODO validar). (`optimization.py`).
 - **Async não integrado**: `async_fetch.py` não é usado pela UI. (TODO integrar/avaliar). (`async_fetch.py`).
 - **Falhas no OSRM Table interrompem o fluxo**: quando o OSRM não retorna matriz válida, o pipeline é abortado e o usuário precisa tentar novamente. (`data_fetch.py`, `ui.py`).
+- **Checklist debug de POIs** (recente): quando o total cair demais, verifique bbox/area, tiles, parse (coords), dedupe, anti-vazamento, filtros por tags/texto e corte por limite via logs + modo debug. Foi corrigido um filtro que aplicava tags PT-BR como AND, reduzindo quase tudo. (`app.py`, `core.py`, `data_fetch.py`).
 
 ### Roadmap
 - Integrar `async_fetch.py` ao fluxo principal.

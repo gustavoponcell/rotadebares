@@ -132,6 +132,7 @@ col_left, col_right = st.columns(2)
 with col_left:
     city = st.text_input("Município", value="Diamantina", key="city")
     include_overture_toggle = st.toggle("Incluir Overture Places (experimental)", value=False)
+    debug_mode = st.toggle("Modo debug", value=False)
     include_overture = include_overture_toggle or is_overture_enabled()
 
     st.subheader("Filtros de categorias")
@@ -201,6 +202,34 @@ with col_left:
         if preview_map_html:
             st.markdown("**Mapa preview**")
             st.components.v1.html(preview_map_html, height=400, scrolling=True)
+
+        if debug_mode and preview_report:
+            st.markdown("### Debug")
+            st.write("**BBox**", preview_report.bbox)
+            st.write("**Area ID**", preview_report.area_id)
+            if preview_report.tiles:
+                st.write("**Tiles**", preview_report.tiles)
+            counts_table = [
+                {"Etapa": "Overpass bruto", "Total": preview_report.raw_total},
+                {"Etapa": "Parse ok", "Total": preview_report.parsed_total},
+                {"Etapa": "Merge", "Total": preview_report.merged_total},
+                {"Etapa": "Dedupe", "Total": preview_report.dedup_total},
+                {"Etapa": "Anti-vazamento", "Total": preview_report.bbox_filtered_total},
+                {"Etapa": "Filtro texto", "Total": preview_report.text_filtered_total},
+                {"Etapa": "Limite final", "Total": preview_report.limit_total or len(preview_pois)},
+            ]
+            st.dataframe(counts_table, use_container_width=True, hide_index=True)
+            if preview_report.tile_raw_counts:
+                st.markdown("**Counts por tile (Overpass)**")
+                st.dataframe(preview_report.tile_raw_counts, use_container_width=True, hide_index=True)
+            if preview_report.overpass_errors:
+                st.markdown("**Erros Overpass**")
+                st.dataframe(preview_report.overpass_errors, use_container_width=True, hide_index=True)
+            if preview_report.sample_pois:
+                st.markdown("**Amostra (<=5)**")
+                st.dataframe(preview_report.sample_pois, use_container_width=True, hide_index=True)
+            st.markdown("**Primeiros 20 POIs**")
+            st.dataframe(preview_rows[:20], use_container_width=True, hide_index=True)
 
     poi_labels: List[str] = []
     poi_lookup: Dict[str, dict] = {}
