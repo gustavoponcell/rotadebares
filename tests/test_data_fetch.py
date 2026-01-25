@@ -65,9 +65,11 @@ def test_coletar_pois_bbox_filtering():
                 "osm_id": 1,
                 "name": "Bar1",
                 "amenity": None,
+                "category": None,
                 "lat": 1.0,
                 "lon": 1.0,
                 "source": "osm",
+                "raw_tags": {"name": "Bar1"},
             }
         ]
 
@@ -92,9 +94,11 @@ def test_coletar_pois_dedup_inside():
                 "osm_id": 10,
                 "name": "Bar1",
                 "amenity": None,
+                "category": None,
                 "lat": 1.0,
                 "lon": 1.0,
                 "source": "osm",
+                "raw_tags": {"name": "Bar1"},
             }
         ]
 
@@ -131,10 +135,12 @@ def test_coletar_pois_addr_city():
                 "osm_id": 21,
                 "name": "Bar1",
                 "amenity": None,
+                "category": None,
                 "lat": 1.0,
                 "lon": 1.0,
                 "addr:city": "cidade",
                 "source": "osm",
+                "raw_tags": {"name": "Bar1", "addr:city": "cidade"},
             }
         ]
 
@@ -163,9 +169,11 @@ def test_coletar_pois_polygon():
                 "osm_id": 31,
                 "name": "Bar1",
                 "amenity": None,
+                "category": None,
                 "lat": 1.0,
                 "lon": 1.0,
                 "source": "osm",
+                "raw_tags": {"name": "Bar1"},
             }
         ]
 
@@ -213,8 +221,10 @@ def test_coletar_pois_anti_vazamento_bbox():
                 "osm_id": 1,
                 "name": "Dentro",
                 "amenity": None,
+                "category": None,
                 "lat": 1.0,
                 "lon": 1.0,
                 "source": "osm",
+                "raw_tags": {"name": "Dentro"},
             }
         ]

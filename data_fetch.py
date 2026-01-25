@@ -19,6 +19,26 @@ from geocoding import (
 
 log = logging.getLogger(__name__)
 
+OSM_AMENITY_TAGS = [
+    "bar",
+    "pub",
+    "biergarten",
+    "nightclub",
+    "cafe",
+    "restaurant",
+    "fast_food",
+]
+
+PTBR_TEXT_TAGS = [
+    "república",
+    "lanchonete",
+    "cervejaria",
+    "boate",
+    "choperia",
+    "boteco",
+    "petiscaria",
+]
+
 AMENITY_TAGS = [
     "bar",
     "pub",
@@ -27,6 +47,13 @@ AMENITY_TAGS = [
     "cafe",
     "restaurant",
     "fast_food",
+    "república",
+    "lanchonete",
+    "cervejaria",
+    "boate",
+    "choperia",
+    "boteco",
+    "petiscaria",
 ]
 
 # Sessao HTTP com retries
@@ -118,9 +145,11 @@ def _build_overpass_query(
     cidade: str,
     area_id: int | None,
     bbox: Tuple[float, float, float, float] | None,
+    amenities: List[str] | None,
     timeout: int = OVERPASS_TIMEOUT,
 ) -> str:
-    amenity_filter = "|".join(AMENITY_TAGS)
+    amenities = amenities or OSM_AMENITY_TAGS
+    amenity_filter = "|".join(amenities)
     if area_id:
         return f"""
         [out:json][timeout:{timeout}];
@@ -179,9 +208,11 @@ def _normalize_poi(el: dict) -> dict | None:
         "osm_id": osm_id,
         "name": name,
         "amenity": tags.get("amenity"),
+        "category": tags.get("amenity"),
         "lat": float(lat),
         "lon": float(lon),
         "source": "osm",
+        "raw_tags": tags,
     }
     extra_tags = {
         key: value
@@ -218,6 +249,7 @@ def _fetch_overpass_elements(
 
 def coletar_pois(
     cidade: str,
+    selected_amenities: List[str] | None = None,
     max_tiles_total: int = 16,
     overlap_m: int = 200,
     max_workers: int = 4,
@@ -235,12 +267,26 @@ def coletar_pois(
     else:
         bbox_tiles = [None]
 
-    def fetch_tile(tile: Tuple[float, float, float, float] | None) -> Tuple[Tuple[float, float, float, float] | None, List[dict] | None]:
+    def fetch_tile(
+        tile: Tuple[float, float, float, float] | None,
+    ) -> Tuple[Tuple[float, float, float, float] | None, List[dict] | None]:
         if tile:
             tile_bbox_overpass = (tile[1], tile[3], tile[0], tile[2])
-            query = _build_overpass_query(cidade, None, tile_bbox_overpass, timeout=overpass_timeout)
+            query = _build_overpass_query(
+                cidade,
+                None,
+                tile_bbox_overpass,
+                selected_amenities,
+                timeout=overpass_timeout,
+            )
         else:
-            query = _build_overpass_query(cidade, area_id, None, timeout=overpass_timeout)
+            query = _build_overpass_query(
+                cidade,
+                area_id,
+                None,
+                selected_amenities,
+                timeout=overpass_timeout,
+            )
         elements = _fetch_overpass_elements(query, max_retries, backoff_factor, overpass_timeout)
         return tile, elements
 
@@ -332,6 +378,9 @@ def osrm_table(latlons: List[Tuple[float, float]], timeout: int = 30) -> List[Li
         return None
 
 __all__ = [
+    "AMENITY_TAGS",
+    "OSM_AMENITY_TAGS",
+    "PTBR_TEXT_TAGS",
     "PoisFetchReport",
     "PoisFetchResult",
     "tile_bbox",

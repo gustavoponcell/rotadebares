@@ -1,9 +1,18 @@
 import logging
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
-from data_fetch import PoisFetchReport, PoisFetchResult, batch_altitude, coletar_pois, osrm_table
+from data_fetch import (
+    AMENITY_TAGS,
+    OSM_AMENITY_TAGS,
+    PTBR_TEXT_TAGS,
+    PoisFetchReport,
+    PoisFetchResult,
+    batch_altitude,
+    coletar_pois,
+    osrm_table,
+)
 from geocoding import geocode_fallback_single, geocode_strict_single, get_city_bbox
 from mapping import build_map
 from optimization import apply_elevation_penalty, solve_tsp
@@ -42,26 +51,120 @@ def _trim_pois_by_bbox_center(
     return sorted(pois, key=dist_sq)[:limit]
 
 
-def load_pois(
+def _trim_pois_by_reference(
+    pois: List[dict],
+    reference: Optional[Tuple[float, float]],
+    limit: int,
+) -> List[dict]:
+    if limit <= 0 or len(pois) <= limit:
+        return pois
+    if not reference:
+        return pois[:limit]
+    ref_lat, ref_lon = reference
+    cos_lat = math.cos(math.radians(ref_lat))
+
+    def dist_sq(poi: dict) -> float:
+        lat = float(poi.get("lat", 0.0))
+        lon = float(poi.get("lon", 0.0))
+        dx = (lon - ref_lon) * cos_lat
+        dy = lat - ref_lat
+        return dx * dx + dy * dy
+
+    return sorted(pois, key=dist_sq)[:limit]
+
+
+def approximate_distance_km(
+    lat1: float,
+    lon1: float,
+    lat2: float,
+    lon2: float,
+) -> float:
+    """Retorna distância aproximada em km usando Haversine."""
+
+    radius_km = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    return 2 * radius_km * math.asin(math.sqrt(a))
+
+
+def build_poi_text_blob(poi: dict) -> str:
+    parts: List[str] = []
+    for key in ("name", "amenity", "category", "operator", "brand", "description", "cuisine"):
+        value = poi.get(key)
+        if value:
+            parts.append(str(value))
+    raw_tags = poi.get("raw_tags")
+    if isinstance(raw_tags, dict):
+        parts.extend(str(value) for value in raw_tags.values() if value)
+        parts.extend(str(key) for key in raw_tags.keys() if key)
+    elif raw_tags:
+        parts.append(str(raw_tags))
+    return " ".join(parts)
+
+
+def filter_pois_by_text(pois: Iterable[dict], text_tags: Iterable[str]) -> List[dict]:
+    text_tags = [tag.lower() for tag in text_tags if tag]
+    if not text_tags:
+        return list(pois)
+    filtered: List[dict] = []
+    for poi in pois:
+        blob = build_poi_text_blob(poi).lower()
+        if any(tag in blob for tag in text_tags):
+            filtered.append(poi)
+    return filtered
+
+
+def fetch_osm_pois(city: str, selected_osm_amenities: Optional[List[str]]) -> PoisFetchResult:
+    selected_osm_amenities = selected_osm_amenities or OSM_AMENITY_TAGS
+    return coletar_pois(city, selected_amenities=selected_osm_amenities)
+
+
+def trim_pois_for_osrm(
+    pois: List[dict],
+    start_coords: Optional[Tuple[float, float]],
+    bbox: Optional[Tuple[float, float, float, float]],
+    limit: int,
+) -> Tuple[List[dict], int]:
+    if limit <= 0 or len(pois) <= limit:
+        return pois, 0
+    if start_coords:
+        trimmed = _trim_pois_by_reference(pois, start_coords, limit)
+    else:
+        trimmed = _trim_pois_by_bbox_center(pois, bbox, limit)
+    return trimmed, max(0, len(pois) - len(trimmed))
+
+
+def fetch_places(
     city: str,
-    include_overture: Optional[bool] = None,
+    bbox: Optional[Tuple[float, float, float, float]],
+    selected_tags: List[str],
+    include_overture: bool,
     overture_limit: int = 300,
     combined_limit: int = 300,
 ) -> PoisFetchResult:
-    """Carrega POIs para um município usando o Overpass e, opcionalmente, Overture."""
-
     city = city.strip()
-    if not city:
-        return PoisFetchResult(pois=[], report=PoisFetchReport(tiles_total=0, tiles_failed=0))
+    if not city or not selected_tags:
+        report = PoisFetchReport(tiles_total=0, tiles_failed=0)
+        return PoisFetchResult(pois=[], report=report)
 
-    osm_result = coletar_pois(city)
+    selected_osm = [tag for tag in selected_tags if tag in OSM_AMENITY_TAGS]
+    selected_text = [tag for tag in selected_tags if tag in PTBR_TEXT_TAGS]
+    if not selected_osm and selected_text:
+        selected_osm = list(OSM_AMENITY_TAGS)
+
+    osm_result = fetch_osm_pois(city, selected_osm)
     report = osm_result.report
     report.osm_total = len(osm_result.pois)
 
-    overture_enabled = is_overture_enabled() if include_overture is None else include_overture
+    overture_enabled = bool(include_overture or is_overture_enabled())
     overture_pois: List[dict] = []
-    if overture_enabled and is_overture_enabled():
-        bbox = get_city_bbox(city)
+    if overture_enabled:
         if bbox:
             try:
                 overture_pois = fetch_overture_places(
@@ -74,15 +177,43 @@ def load_pois(
         else:
             report.overture_error = "bbox não encontrada"
 
-    combined = list(osm_result.pois) + list(overture_pois)
-    report.overture_enabled = bool(overture_enabled and is_overture_enabled())
+    report.overture_enabled = overture_enabled and report.overture_error is None
     report.overture_total = len(overture_pois)
+
+    combined = list(osm_result.pois) + list(overture_pois)
+    if selected_text:
+        combined = filter_pois_by_text(combined, selected_text)
+
     report.combined_total = len(combined)
 
-    trimmed = _trim_pois_by_bbox_center(combined, get_city_bbox(city), combined_limit)
+    trimmed = _trim_pois_by_bbox_center(combined, bbox, combined_limit)
     report.trimmed_total = max(0, report.combined_total - len(trimmed))
 
     return PoisFetchResult(pois=trimmed, report=report)
+
+
+def load_pois(
+    city: str,
+    include_overture: Optional[bool] = None,
+    overture_limit: int = 300,
+    combined_limit: int = 300,
+) -> PoisFetchResult:
+    """Carrega POIs para um município usando o Overpass e, opcionalmente, Overture."""
+
+    city = city.strip()
+    if not city:
+        return PoisFetchResult(pois=[], report=PoisFetchReport(tiles_total=0, tiles_failed=0))
+    selected_tags = list(AMENITY_TAGS)
+    bbox = get_city_bbox(city)
+    include_overture = is_overture_enabled() if include_overture is None else include_overture
+    return fetch_places(
+        city=city,
+        bbox=bbox,
+        selected_tags=selected_tags,
+        include_overture=include_overture,
+        overture_limit=overture_limit,
+        combined_limit=combined_limit,
+    )
 
 
 def compute_route_and_map(
@@ -182,4 +313,15 @@ def compute_route_and_map(
     return RouteResult(route=route, map_html=html)
 
 
-__all__ = ["RouteResult", "PoisFetchResult", "load_pois", "compute_route_and_map"]
+__all__ = [
+    "RouteResult",
+    "PoisFetchResult",
+    "approximate_distance_km",
+    "build_poi_text_blob",
+    "fetch_osm_pois",
+    "fetch_places",
+    "filter_pois_by_text",
+    "load_pois",
+    "trim_pois_for_osrm",
+    "compute_route_and_map",
+]
