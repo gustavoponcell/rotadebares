@@ -2,6 +2,8 @@
 
 Este repositório contém um script interativo para gerar rotas otimizadas de bares e restaurantes utilizando apenas APIs públicas e gratuitas. O código foi pensado para execução no Google Colab.
 
+> **Nota**: a coleta de POIs via Overpass inclui `amenity` (bar, pub, biergarten, nightclub, cafe, restaurant, fast_food) em `node/way/relation`, com deduplicação por ID OSM. (`data_fetch.py`).
+
 ## Requisitos
 
 - Python 3.8 ou superior

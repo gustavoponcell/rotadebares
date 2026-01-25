@@ -73,7 +73,9 @@ launch_ui()
 ## D) Fontes de dados e serviços externos (somente gratuitos)
 
 ### 1) Overpass API (POIs)
-- **O que fazemos**: buscamos bares/restaurantes e categorias correlatas (bar, pub, cafe, fast_food, nightclub, brewery, shop=alcohol) com filtro por `area` (admin_level 8) ou `bbox` quando disponível. (`data_fetch.py::coletar_pois()`).
+- **O que fazemos**: buscamos POIs por `amenity` com as tags **bar, pub, biergarten, nightclub, cafe, restaurant, fast_food** com filtro por `area` (admin_level 8) ou `bbox` quando disponível. (`data_fetch.py::coletar_pois()`).
+- **Tipos OSM**: consultamos `node`, `way` e `relation` e usamos `out center tags;` para obter coordenadas centrais quando necessário. (`data_fetch.py::coletar_pois()`).
+- **Normalização e dedupe**: cada POI recebe `osm_type`, `osm_id` e `poi_id` (`osm:{osm_type}:{osm_id}`), com deduplicação estrita por ID OSM (não por nome). (`data_fetch.py::coletar_pois()`).
 - **Limites/boas práticas**:
   - Respeitar timeouts e evitar excesso de requisições.
   - Reaproveitar `area_id` e `bbox` para reduzir carga. (`geocoding.py::get_city_area_id()` + `get_city_bbox()`).

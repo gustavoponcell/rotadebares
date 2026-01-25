@@ -16,6 +16,16 @@ from geocoding import (
 
 log = logging.getLogger(__name__)
 
+AMENITY_TAGS = [
+    "bar",
+    "pub",
+    "biergarten",
+    "nightclub",
+    "cafe",
+    "restaurant",
+    "fast_food",
+]
+
 # Sessao HTTP com retries
 session = requests.Session()
 retries = Retry(total=5, backoff_factor=1, status_forcelist=[502,504,522,524], allowed_methods=["GET","POST"])
@@ -24,56 +34,81 @@ session.mount("http://", adapter)
 session.mount("https://", adapter)
 
 
+def _build_overpass_query(cidade: str, area_id: int | None, bbox: Tuple[float, float, float, float] | None) -> str:
+    amenity_filter = "|".join(AMENITY_TAGS)
+    if area_id:
+        return f"""
+        [out:json][timeout:60];
+        area({area_id})->.a;
+        (
+          node[\"amenity\"~\"^({amenity_filter})$\"](area.a);
+          way[\"amenity\"~\"^({amenity_filter})$\"](area.a);
+          relation[\"amenity\"~\"^({amenity_filter})$\"](area.a);
+        );
+        out center tags;
+        """
+    if bbox:
+        s, n, w, e = bbox
+        return f"""
+        [out:json][timeout:60];
+        (
+          node[\"amenity\"~\"^({amenity_filter})$\"]({s},{w},{n},{e});
+          way[\"amenity\"~\"^({amenity_filter})$\"]({s},{w},{n},{e});
+          relation[\"amenity\"~\"^({amenity_filter})$\"]({s},{w},{n},{e});
+        );
+        out center tags;
+        """
+    return f"""
+    [out:json][timeout:60];
+    area[\"name\"=\"{cidade}\"][boundary=\"administrative\"][admin_level=\"8\"]->.a;
+    (
+      node[\"amenity\"~\"^({amenity_filter})$\"](area.a);
+      way[\"amenity\"~\"^({amenity_filter})$\"](area.a);
+      relation[\"amenity\"~\"^({amenity_filter})$\"](area.a);
+    );
+    out center tags;
+    """
+
+
+def _normalize_poi(el: dict) -> dict | None:
+    osm_type = el.get("type")
+    osm_id = el.get("id")
+    if not osm_type or osm_id is None:
+        return None
+    if osm_type == "node":
+        lat = el.get("lat")
+        lon = el.get("lon")
+    else:
+        center = el.get("center", {})
+        lat = center.get("lat")
+        lon = center.get("lon")
+    if lat is None or lon is None:
+        return None
+    tags = el.get("tags", {})
+    poi = {
+        "poi_id": f"osm:{osm_type}:{osm_id}",
+        "osm_type": osm_type,
+        "osm_id": osm_id,
+        "name": tags.get("name"),
+        "amenity": tags.get("amenity"),
+        "lat": float(lat),
+        "lon": float(lon),
+    }
+    extra_tags = {
+        key: value
+        for key, value in tags.items()
+        if key.startswith("addr:") or key in {"opening_hours", "cuisine"}
+    }
+    poi.update(extra_tags)
+    return poi
+
+
 def coletar_pois(cidade: str) -> List[dict]:
     """Busca bares e restaurantes via Overpass."""
     bbox = get_city_bbox(cidade)
     area_id = get_city_area_id(cidade)
     poly = get_city_polygon(cidade)
-    if area_id:
-        q = f"""
-        [out:json][timeout:60];
-        area({area_id})->.a;
-        (
-          node[\"amenity\"=\"bar\"](area.a);
-          way[\"amenity\"=\"bar\"](area.a);
-          rel[\"amenity\"=\"bar\"](area.a);
-          node[\"bar\"=\"yes\"](area.a);
-          node[\"craft\"=\"brewery\"](area.a);
-          node[\"shop\"=\"alcohol\"](area.a);
-          node[\"amenity\"=\"pub\"](area.a);
-          node[\"amenity\"=\"cafe\"](area.a);
-          node[\"amenity\"=\"fast_food\"](area.a);
-          node[\"amenity\"=\"nightclub\"](area.a);
-        );
-        out center tags;
-        """
-    elif bbox:
-        s, n, w, e = bbox
-        q = f"""
-        [out:json][timeout:60];
-        (
-          node[\"amenity\"=\"bar\"]({s},{w},{n},{e});
-          node[\"bar\"=\"yes\"]({s},{w},{n},{e});
-          node[\"craft\"=\"brewery\"]({s},{w},{n},{e});
-          node[\"shop\"=\"alcohol\"]({s},{w},{n},{e});
-          node[\"amenity\"=\"pub\"]({s},{w},{n},{e});
-          node[\"amenity\"=\"cafe\"]({s},{w},{n},{e});
-          node[\"amenity\"=\"fast_food\"]({s},{w},{n},{e});
-          node[\"amenity\"=\"nightclub\"]({s},{w},{n},{e});
-        );
-        out center tags;
-        """
-    else:
-        q = f"""
-        [out:json][timeout:60];
-        area[\"name\"=\"{cidade}\"][boundary=\"administrative\"][admin_level=\"8\"]->.a;
-        (
-          node[\"amenity\"=\"bar\"](area.a);
-          way[\"amenity\"=\"bar\"](area.a);
-          rel[\"amenity\"=\"bar\"](area.a);
-        );
-        out center tags;
-        """
+    q = _build_overpass_query(cidade, area_id, bbox)
     try:
         resp = session.post("http://overpass-api.de/api/interpreter", data={"data": q}, timeout=60)
         resp.raise_for_status()
@@ -87,28 +122,23 @@ def coletar_pois(cidade: str) -> List[dict]:
         log.error(f"Erro ao decodificar resposta Overpass: {e}")
         return []
 
-    pois_by_name = {}
+    pois_by_id = {}
     for el in elements:
-        tags = el.get("tags", {})
-        name = tags.get("name")
-        lat = el.get("lat") or el.get("center", {}).get("lat")
-        lon = el.get("lon") or el.get("center", {}).get("lon")
-        if not (name and lat and lon):
+        poi = _normalize_poi(el)
+        if not poi:
             continue
+        tags = el.get("tags", {})
         city_tag = tags.get("addr:city")
         if city_tag and city_tag.lower() != cidade.lower():
             continue
-        if poly and not point_in_polygon(float(lat), float(lon), poly):
+        if poly and not point_in_polygon(poi["lat"], poi["lon"], poly):
             continue
-        if bbox and not poly and not dentro_da_cidade(float(lat), float(lon), bbox):
+        if bbox and not poly and not dentro_da_cidade(poi["lat"], poi["lon"], bbox):
             continue
-        if name not in pois_by_name:
-            pois_by_name[name] = {
-                "name": name,
-                "lat": float(lat),
-                "lon": float(lon),
-            }
-    return list(pois_by_name.values())
+        poi_id = poi["poi_id"]
+        if poi_id not in pois_by_id:
+            pois_by_id[poi_id] = poi
+    return list(pois_by_id.values())
 
 
 def batch_altitude(latlons: List[Tuple[float, float]]) -> List[float]:
