@@ -25,6 +25,18 @@ No Colab, habilite os widgets:
 
 ## Uso
 
+### UI web (Streamlit / Codespaces)
+
+Para testar rapidamente no GitHub Codespaces ou localmente, execute:
+
+```bash
+streamlit run app.py --server.address 0.0.0.0 --server.port 8501
+```
+
+Abra a aba **Ports** no Codespaces e acesse a porta **8501** para ver a UI web.
+
+### UI no Colab (ipywidgets)
+
 Execute `main.py` a partir de um notebook (Colab ou Jupyter):
 
 ```python
