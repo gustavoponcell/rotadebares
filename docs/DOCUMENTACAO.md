@@ -201,6 +201,18 @@ app.py
 - `mapping.py`: isolar geração de mapa e chamadas de rota do OSRM.
 - `core.py`: centralizar pipeline reutilizável.
 - `ui.py`/`app.py`: somente UI e orquestração, importando camadas de serviço.
+- `config.py`: settings únicos (timeouts, retries, limites e TTL do cache).
+- `models.py`: dataclasses para POI e RouteResult.
+- `services.py`: interfaces e adapters para fontes de POIs, matriz/rota e altitude.
+- `cache.py`: cache de dois níveis (memória + persistente) e chaves estáveis.
+- `http_client.py`: sessão HTTP compartilhada com retries/backoff.
+
+### Arquitetura alvo (resumo do novo design)
+- **Domain**: `models.py` concentra `POI` e `RouteResult`.
+- **Services**: `services.py` contém providers (`OverpassPlacesProvider`, `OSRMProvider`, `OpenElevationProvider`) que encapsulam detalhes de integração externa.
+- **Core**: `core.py` orquestra o pipeline, aplicando caches e controles de escala.
+- **UI**: `app.py` (Streamlit) e `ui.py` (ipywidgets) mantêm estado e chamam o core.
+- **Config**: `config.py` centraliza parâmetros (timeouts, limites, TTL). 
 
 ## G) Algoritmo de roteirização (explicação técnica)
 
@@ -230,9 +242,12 @@ app.py
 - **Onde existe hoje**:
   - `@lru_cache` em `get_city_bbox()`, `get_city_area_id()` e `get_city_polygon()` para reduzir chamadas Overpass/Nominatim. (`geocoding.py`).
   - Cache simples em `_cache_geo` para geocoding de endereços. (`geocoding.py`).
-- **Onde faz sentido ampliar** (TODO):
-  - Cache de respostas de `osrm_table()` quando mesma lista de pontos é usada.
-  - Cache de `coletar_pois()` por cidade.
+- **Cache expandido (implementado)**:
+  - Cache em **dois níveis** (memória + persistente em disco) com TTL configurável. (`cache.py`, `config.py`).
+  - Chaves estáveis com rounding de coordenadas (6 casas). (`cache.py`).
+  - Cache para `coletar_pois()`, `osrm_table()` e `batch_altitude()`. (`data_fetch.py`).
+  - Logs de HIT/MISS/STALE (modo debug). (`cache.py`).
+  - Botão “Limpar cache local” disponível na UI Streamlit/Colab. (`app.py`, `ui.py`).
 
 ### Rate limiting
 - **Implementado** via `geopy.extra.rate_limiter.RateLimiter` (1s entre requisições) para Nominatim e Photon. (`geocoding.py`).
@@ -254,9 +269,10 @@ app.py
 ### Streamlit (UI web)
 - **Inputs principais**: município, seleção de POIs, partida/destino, extras e peso de subida. (`app.py`).
 - **Fonte opcional**: toggle **“Incluir Overture Places (experimental)”** sempre aparece na UI e tem fallback automático. Se o DuckDB/HTTPFS/Spatial falhar, a UI mostra um aviso e segue apenas com OSM. `ENABLE_OVERTURE=true` pode forçar a fonte adicional, mas não é obrigatório. (`app.py`, `core.py`, `overture_fetch.py`).
-- **Prévia automática**: ao selecionar município e tags, o app busca POIs (OSM e opcionalmente Overture) e exibe total, contagem por categoria, matches por texto e tabela detalhada antes de calcular rota. (`app.py`, `core.py`).
+- **Prévia controlada**: a prévia só é recarregada quando cidade/tags/flag Overture ou limite de POIs mudam; há botão “Atualizar prévia” para evitar recomputação a cada interação. (`app.py`).
 - **Filtros por AMENITY_TAGS**: tags OSM entram no Overpass como filtro `amenity=*`; tags PT-BR fazem filtro textual em `name`, `brand`, `operator`, `description`, `cuisine` e tags cruas. (`app.py`, `core.py`, `data_fetch.py`).
-- **Proteção de escala**: se o total de POIs filtrados exceder o limite (padrão 300), o app corta a lista pelos pontos mais próximos do centro da bbox (ou do start quando já geocodificado) para evitar explosão na chamada OSRM Table. (`app.py`, `core.py`).
+- **Proteção de escala**: limite máximo configurável na UI (padrão 300). O app corta a lista pelos pontos mais próximos do start (se disponível) ou do centro da bbox, evitando explosão no OSRM Table. (`app.py`, `core.py`).
+- **OSRM amigável**: opção para reduzir pontos automaticamente se o OSRM Table falhar, antes de abortar o fluxo. (`app.py`, `core.py`).
 - **Modo debug**: toggle “Modo debug” exibe bbox/area, tiles, contagens por etapa, erros de Overpass, amostras e os primeiros POIs para diagnóstico rápido. (`app.py`, `core.py`, `data_fetch.py`).
 - **Output**: mapa renderizado via `st.components.v1.html` e download do HTML via `st.download_button`. (`app.py`).
 
@@ -293,7 +309,7 @@ python benchmark.py
 - **Sem notebook principal versionado**: falta um `.ipynb` oficial para execução no Colab. (TODO).
 - **Uso de `networkx`** em `optimization.py` pode exigir dependência extra não listada em `requirements.txt`. (TODO validar). (`optimization.py`).
 - **Async não integrado**: `async_fetch.py` não é usado pela UI. (TODO integrar/avaliar). (`async_fetch.py`).
-- **Falhas no OSRM Table interrompem o fluxo**: quando o OSRM não retorna matriz válida, o pipeline é abortado e o usuário precisa tentar novamente. (`data_fetch.py`, `ui.py`).
+- **Falhas no OSRM Table interrompem o fluxo**: agora há tentativa de redução automática de pontos antes de abortar, mas ainda pode falhar em ambientes instáveis. (`core.py`).
 - **Checklist debug de POIs** (recente): quando o total cair demais, verifique bbox/area, tiles, parse (coords), dedupe, anti-vazamento, filtros por tags/texto e corte por limite via logs + modo debug. Foi corrigido um filtro que aplicava tags PT-BR como AND, reduzindo quase tudo. (`app.py`, `core.py`, `data_fetch.py`).
 
 ### Roadmap
