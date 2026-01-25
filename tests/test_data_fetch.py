@@ -201,6 +201,23 @@ def test_coletar_pois_dedup_across_tiles():
         assert result.report.tiles_failed == 0
 
 
+def test_coletar_pois_dedup_distinct_ids():
+    elements = [
+        {"type": "node", "id": 1, "tags": {"name": "Bar1"}, "lat": 1, "lon": 1},
+        {"type": "node", "id": 2, "tags": {"name": "Bar2"}, "lat": 1.2, "lon": 1.2},
+        {"type": "node", "id": 3, "tags": {"name": "Bar3"}, "lat": 1.4, "lon": 1.4},
+    ]
+    resp = FakeResp({"elements": elements})
+    bbox = (0, 2, 0, 2)
+    with mock.patch("data_fetch.get_city_bbox", return_value=bbox), \
+         mock.patch("data_fetch.get_city_area_id", return_value=None), \
+         mock.patch("data_fetch.get_city_polygon", return_value=None), \
+         mock.patch("data_fetch.tile_bbox", return_value=[(0, 0, 2, 2)]), \
+         mock.patch("data_fetch.session.post", return_value=resp):
+        result = data_fetch.coletar_pois("cidade")
+        assert len(result.pois) == 3
+
+
 def test_coletar_pois_anti_vazamento_bbox():
     elements = [
         {"type": "node", "id": 1, "tags": {"name": "Dentro"}, "lat": 1, "lon": 1},

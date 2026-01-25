@@ -155,12 +155,15 @@ def fetch_places(
 
     selected_osm = [tag for tag in selected_tags if tag in OSM_AMENITY_TAGS]
     selected_text = [tag for tag in selected_tags if tag in PTBR_TEXT_TAGS]
+    text_only_filter = False
     if not selected_osm and selected_text:
         selected_osm = list(OSM_AMENITY_TAGS)
+        text_only_filter = True
 
     osm_result = fetch_osm_pois(city, selected_osm)
     report = osm_result.report
     report.osm_total = len(osm_result.pois)
+    log.info("OSM total=%s", report.osm_total)
 
     overture_enabled = bool(include_overture or is_overture_enabled())
     overture_pois: List[dict] = []
@@ -182,12 +185,41 @@ def fetch_places(
 
     combined = list(osm_result.pois) + list(overture_pois)
     if selected_text:
-        combined = filter_pois_by_text(combined, selected_text)
+        selected_text_lower = [tag.lower() for tag in selected_text if tag]
+        if selected_osm and not text_only_filter:
+            selected_osm_lower = {tag.lower() for tag in selected_osm if tag}
+            combined = [
+                poi
+                for poi in combined
+                if (poi.get("amenity") or poi.get("category") or "").lower() in selected_osm_lower
+                or any(tag in build_poi_text_blob(poi).lower() for tag in selected_text_lower)
+            ]
+        else:
+            combined = filter_pois_by_text(combined, selected_text_lower)
+        report.text_filtered_total = len(combined)
+        log.info("Filtro texto aplicado: %s", report.text_filtered_total)
 
     report.combined_total = len(combined)
 
     trimmed = _trim_pois_by_bbox_center(combined, bbox, combined_limit)
     report.trimmed_total = max(0, report.combined_total - len(trimmed))
+    report.limit_total = len(trimmed)
+    log.info("Combined=%s trimmed=%s", report.combined_total, report.limit_total)
+
+    if len(trimmed) <= 1:
+        report.sample_pois = report.sample_pois or [
+            {
+                "poi_id": poi.get("poi_id"),
+                "name": poi.get("name"),
+                "source": poi.get("source"),
+                "amenity": poi.get("amenity") or poi.get("category"),
+                "lat": poi.get("lat"),
+                "lon": poi.get("lon"),
+                "raw_tags": poi.get("raw_tags"),
+            }
+            for poi in trimmed[:5]
+        ]
+        log.warning("Poucos POIs após merge/filtros (%s). Amostra: %s", len(trimmed), report.sample_pois)
 
     return PoisFetchResult(pois=trimmed, report=report)
 
@@ -206,7 +238,7 @@ def load_pois(
     selected_tags = list(AMENITY_TAGS)
     bbox = get_city_bbox(city)
     include_overture = is_overture_enabled() if include_overture is None else include_overture
-    return fetch_places(
+    result = fetch_places(
         city=city,
         bbox=bbox,
         selected_tags=selected_tags,
@@ -214,6 +246,30 @@ def load_pois(
         overture_limit=overture_limit,
         combined_limit=combined_limit,
     )
+    report = result.report
+    log.info(
+        "load_pois: bbox=%s osm=%s combined=%s text=%s trimmed=%s",
+        bbox,
+        report.osm_total,
+        report.combined_total,
+        report.text_filtered_total,
+        report.limit_total or len(result.pois),
+    )
+    if len(result.pois) <= 1:
+        report.sample_pois = report.sample_pois or [
+            {
+                "poi_id": poi.get("poi_id"),
+                "name": poi.get("name"),
+                "source": poi.get("source"),
+                "amenity": poi.get("amenity") or poi.get("category"),
+                "lat": poi.get("lat"),
+                "lon": poi.get("lon"),
+                "raw_tags": poi.get("raw_tags"),
+            }
+            for poi in result.pois[:5]
+        ]
+        log.warning("load_pois retornou poucos POIs (%s). Amostra: %s", len(result.pois), report.sample_pois)
+    return result
 
 
 def compute_route_and_map(
