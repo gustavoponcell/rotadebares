@@ -10,3 +10,4 @@ loguru
 networkx
 pytest-asyncio
 shapely
+streamlit
