@@ -76,11 +76,17 @@ launch_ui()
 - **O que fazemos**: buscamos POIs por `amenity` com as tags **bar, pub, biergarten, nightclub, cafe, restaurant, fast_food** com filtro por `area` (admin_level 8) ou `bbox` quando disponível. (`data_fetch.py::coletar_pois()`).
 - **Tipos OSM**: consultamos `node`, `way` e `relation` e usamos `out center tags;` para obter coordenadas centrais quando necessário. (`data_fetch.py::coletar_pois()`).
 - **Normalização e dedupe**: cada POI recebe `osm_type`, `osm_id` e `poi_id` (`osm:{osm_type}:{osm_id}`), com deduplicação estrita por ID OSM (não por nome). (`data_fetch.py::coletar_pois()`).
+- **Tiling com overlap**:
+  - A `bbox` é dividida em uma grade (1x1, 2x2, 3x3 ou 4x4) respeitando um limite máximo de tiles. (`data_fetch.py::tile_bbox()`).
+  - Cada tile recebe **overlap em metros** convertido para graus, reduzindo vazios entre tiles e melhorando cobertura. (`data_fetch.py::tile_bbox()`).
+  - Cada tile gera **uma consulta Overpass** com retry/backoff e limite de concorrência. (`data_fetch.py::coletar_pois()`).
+- **Anti-vazamento**: após o merge e dedupe, os POIs são filtrados **estritamente** dentro da bbox original (sem overlap), evitando inclusão de cidades vizinhas. (`data_fetch.py::coletar_pois()`).
 - **Limites/boas práticas**:
-  - Respeitar timeouts e evitar excesso de requisições.
-  - Reaproveitar `area_id` e `bbox` para reduzir carga. (`geocoding.py::get_city_area_id()` + `get_city_bbox()`).
+  - Timeouts configuráveis (padrão 60s) para evitar travamentos. (`data_fetch.py::coletar_pois()`).
+  - Retry com backoff para erros de rede/429/5xx.
+  - A UI informa se houve tiles com falha e alerta quando há muitos POIs (>500).
 - **Fallbacks**:
-  - Se `area_id` não existir, usa `bbox`.
+  - Se `area_id` não existir, usa `bbox` (tiling).
   - Se ambos falharem, tenta `area` com nome. (`data_fetch.py::coletar_pois()`).
 
 ### 2) Nominatim/Photon (geocoding via geopy)

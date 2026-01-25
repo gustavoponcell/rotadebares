@@ -14,6 +14,8 @@ st.title("Roteirização de Bares e Restaurantes")
 
 if "pois" not in st.session_state:
     st.session_state.pois = []
+if "pois_report" not in st.session_state:
+    st.session_state.pois_report = None
 
 st.markdown("Preencha os dados abaixo para carregar os pontos de interesse e gerar a rota otimizada.")
 
@@ -28,8 +30,14 @@ with col_left:
             st.error("Informe um município antes de buscar POIs.")
         else:
             st.info(f"Buscando POIs em {city}...")
-            st.session_state.pois = load_pois(city)
+            result = load_pois(city)
+            st.session_state.pois = result.pois
+            st.session_state.pois_report = result.report
             st.success(f"{len(st.session_state.pois)} POIs carregados.")
+            if result.report.tiles_failed:
+                st.warning(f"{result.report.tiles_failed} tiles falharam na busca Overpass.")
+            if len(result.pois) > 500:
+                st.warning("Muitos POIs encontrados (>500). Considere filtrar ou reduzir a área.")
 
     poi_labels: List[str] = []
     poi_lookup: Dict[str, dict] = {}
