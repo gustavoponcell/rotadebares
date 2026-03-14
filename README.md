@@ -32,10 +32,12 @@ No Colab, habilite os widgets:
 Para testar rapidamente no GitHub Codespaces ou localmente, execute:
 
 ```bash
-streamlit run app.py --server.address 0.0.0.0 --server.port 8501
+streamlit run app.py --server.address 0.0.0.0 --server.port 8501 --server.enableCORS false --server.enableXsrfProtection false
 ```
 
 Abra a aba **Ports** no Codespaces e acesse a porta **8501** para ver a UI web.
+
+> Se aparecer **HTTP ERROR 401** ao abrir a porta, normalmente é bloqueio/autenticação do proxy de porta (Codespaces/ambiente remoto). Verifique se a porta 8501 está como **Public** na aba **Ports** e mantenha os flags `--server.enableCORS false --server.enableXsrfProtection false` no comando acima.
 
 ### UI no Colab (ipywidgets)
 
