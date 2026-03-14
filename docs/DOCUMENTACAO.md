@@ -27,8 +27,9 @@ pip install -r requirements.txt
 
 2) **Executar o Streamlit (porta 8501)**
 ```bash
-streamlit run app.py --server.address 0.0.0.0 --server.port 8501
+streamlit run app.py --server.address 0.0.0.0 --server.port 8501 --server.enableCORS false --server.enableXsrfProtection false
 ```
+> Em ambientes com proxy de portas (ex.: Codespaces), erro **HTTP ERROR 401** ao abrir a porta costuma indicar bloqueio/autenticação da porta publicada. Na aba **Ports**, defina a porta **8501** como **Public**.
 
 3) **Acessar a aplicação**
 - No Codespaces, abra a aba **Ports** e clique em **Open in Browser/Preview** na porta **8501**.
